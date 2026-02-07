@@ -32,10 +32,8 @@ def _apply_row_fill(sheet, row: int, max_col: int, fill: PatternFill) -> None:
 
 
 def main() -> None:
-    today = date.today()
-    latest_year = today.year - 1
-    prior_year = latest_year - 1
-    years = [prior_year, latest_year]
+    years = [2023, 2024]
+
 
     base_columns = [
         "Company",
