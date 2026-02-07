@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict
 
 import yfinance as yf
 from openpyxl import load_workbook
@@ -15,8 +15,19 @@ DATA_START_ROW = 3
 
 MISSING_EBIT_FILL = PatternFill("solid", fgColor="FFF2CC")
 
+TICKER_MAP = {
+    "COGX": "CGNX",  # Cognex is CGNX on Yahoo
+    # If ASMI.AS keeps failing, try mapping to ASM.AS or ASMIF
+    # "ASMI.AS": "ASM.AS",
+}
 
-def _first_value(data: dict[str, Any], keys: list[str]) -> Any:
+
+def _map_ticker(t: str) -> str:
+    t = t.strip()
+    return TICKER_MAP.get(t, t)
+
+
+def _first_value(data: Dict[str, Any], keys: list[str]) -> Any:
     for key in keys:
         value = data.get(key)
         if value not in (None, ""):
@@ -37,11 +48,7 @@ def main() -> None:
     workbook = load_workbook(INPUT_FILE)
     sheet = workbook[SHEET_NAME]
 
-    headers = {
-        cell.value: cell.column
-        for cell in sheet[HEADER_ROW]
-        if cell.value
-    }
+    headers = {cell.value: cell.column for cell in sheet[HEADER_ROW] if cell.value}
 
     required_columns = [
         "Ticker",
@@ -61,19 +68,42 @@ def main() -> None:
         ticker = sheet.cell(row=row, column=headers["Ticker"]).value
         selected = sheet.cell(row=row, column=headers["Selected (1/0)"]).value
 
-        if selected != 1 or not ticker:
+        if not ticker or str(selected).strip() != "1":
             continue
 
-        ticker_data = yf.Ticker(str(ticker))
-        info = ticker_data.get_info()
-        fast_info = getattr(ticker_data, "fast_info", {}) or {}
+        raw_ticker = str(ticker).strip()
+        y_ticker = _map_ticker(raw_ticker)
+
+        ticker_data = yf.Ticker(y_ticker)
+
+        # info sometimes fails / is incomplete; don't crash the whole run
+        try:
+            info = ticker_data.get_info() or {}
+        except Exception as e:
+            print(f"{raw_ticker} -> {y_ticker}: get_info() failed: {e}")
+            info = {}
+
+        # fast_info is a special object; access attributes safely
+        fast_info = getattr(ticker_data, "fast_info", None)
+
+        last_price = None
+        fast_mcap = None
+        if fast_info:
+            try:
+                last_price = getattr(fast_info, "last_price", None)
+            except Exception:
+                last_price = None
+            try:
+                fast_mcap = getattr(fast_info, "market_cap", None)
+            except Exception:
+                fast_mcap = None
 
         share_price = _first_value(
-            {**fast_info, **info},
+            {"last_price": last_price, **info},
             ["last_price", "regularMarketPrice"],
         )
         market_cap = _first_value(
-            {**fast_info, **info},
+            {"market_cap": fast_mcap, **info},
             ["market_cap", "marketCap"],
         )
 
@@ -96,7 +126,10 @@ def main() -> None:
         else:
             ebit_cell.value = ebit_value
 
+        print(f"Filled {raw_ticker} (Yahoo: {y_ticker})")
+
     workbook.save(OUTPUT_FILE)
+    print(f"Saved: {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":
