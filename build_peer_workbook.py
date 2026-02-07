@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 
 PEERS = [
     ("Aalberts", "AALB.AS", 1, "Closest diversified industrial technology peer"),
-    ("ASM International", "ASMI.AS", 1, "Automation/advanced tech valuation anchor"),
+    ("Duerr AG", "DUE.DE", 1, "Industrial automation and production systems peer"),
     ("Basler", "BSL.DE", 1, "Direct machine vision hardware/software comparable"),
     ("Cognex", "COGX", 1, "Global machine vision leader benchmark"),
     ("Jenoptik", "JEN.DE", 1, "Photonics and optical systems overlap"),
@@ -33,7 +33,8 @@ def _apply_row_fill(sheet, row: int, max_col: int, fill: PatternFill) -> None:
 
 def main() -> None:
     years = [2023, 2024]
-
+    prior_year, latest_year = years
+    today = date.today()
 
     base_columns = [
         "Company",
