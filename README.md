@@ -18,3 +18,4 @@ py fill_from_yahoo.py
 ```
 
 The fill script writes `TKH_Peer_Analysis_filled.xlsx`.
+It also supports the TKH Group row (including the `TKH` → `TWEKA.AS` mapping) and fills the TKH Inputs block.
