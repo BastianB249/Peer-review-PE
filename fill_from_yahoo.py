@@ -15,11 +15,10 @@ DATA_START_ROW = 3
 MISSING_EBIT_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 TICKER_MAP = {
-    "COGX": "CGNX",  # Cognex on Yahoo
-    # If ASMI.AS fails, try one of these:
-    # "ASMI.AS": "ASM.AS",
-    # "ASMI.AS": "ASMIF",
+    "COGX": "CGNX",     # Cognex on Yahoo
+    "ASMI.AS": "ASM.AS" # ASM International on Yahoo
 }
+
 
 
 def _map_ticker(t: str) -> str:
