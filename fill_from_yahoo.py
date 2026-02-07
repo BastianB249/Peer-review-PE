@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import yfinance as yf
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
-
 
 INPUT_FILE = "TKH_Peer_Analysis.xlsx"
 OUTPUT_FILE = "TKH_Peer_Analysis_filled.xlsx"
@@ -16,23 +15,15 @@ DATA_START_ROW = 3
 MISSING_EBIT_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 TICKER_MAP = {
-    "COGX": "CGNX",  # Cognex is CGNX on Yahoo
-    # If ASMI.AS keeps failing, try mapping to ASM.AS or ASMIF
+    "COGX": "CGNX",  # Cognex on Yahoo
+    # If ASMI.AS fails, try one of these:
     # "ASMI.AS": "ASM.AS",
+    # "ASMI.AS": "ASMIF",
 }
 
 
 def _map_ticker(t: str) -> str:
-    t = t.strip()
-    return TICKER_MAP.get(t, t)
-
-
-def _first_value(data: Dict[str, Any], keys: list[str]) -> Any:
-    for key in keys:
-        value = data.get(key)
-        if value not in (None, ""):
-            return value
-    return None
+    return TICKER_MAP.get(t.strip(), t.strip())
 
 
 def _to_eurm(value: Any) -> float | None:
@@ -44,13 +35,24 @@ def _to_eurm(value: Any) -> float | None:
         return None
 
 
+def _last_close_price(tkr: yf.Ticker) -> float | None:
+    # Use price history instead of fast_info (more stable)
+    try:
+        hist = tkr.history(period="5d")
+        if hist is None or hist.empty:
+            return None
+        return float(hist["Close"].dropna().iloc[-1])
+    except Exception:
+        return None
+
+
 def main() -> None:
-    workbook = load_workbook(INPUT_FILE)
-    sheet = workbook[SHEET_NAME]
+    wb = load_workbook(INPUT_FILE)
+    ws = wb[SHEET_NAME]
 
-    headers = {cell.value: cell.column for cell in sheet[HEADER_ROW] if cell.value}
+    headers = {cell.value: cell.column for cell in ws[HEADER_ROW] if cell.value}
 
-    required_columns = [
+    required = [
         "Ticker",
         "Selected (1/0)",
         "Share Price",
@@ -60,65 +62,45 @@ def main() -> None:
         "EBITDA LTM",
         "EBIT LTM",
     ]
-    missing = [col for col in required_columns if col not in headers]
+    missing = [c for c in required if c not in headers]
     if missing:
-        raise ValueError(f"Missing required columns: {', '.join(missing)}")
+        raise ValueError(f"Missing required columns: {missing}")
 
-    for row in range(DATA_START_ROW, sheet.max_row + 1):
-        ticker = sheet.cell(row=row, column=headers["Ticker"]).value
-        selected = sheet.cell(row=row, column=headers["Selected (1/0)"]).value
+    for row in range(DATA_START_ROW, ws.max_row + 1):
+        ticker = ws.cell(row=row, column=headers["Ticker"]).value
+        selected = ws.cell(row=row, column=headers["Selected (1/0)"]).value
 
         if not ticker or str(selected).strip() != "1":
             continue
 
-        raw_ticker = str(ticker).strip()
-        y_ticker = _map_ticker(raw_ticker)
+        raw = str(ticker).strip()
+        ysym = _map_ticker(raw)
 
-        ticker_data = yf.Ticker(y_ticker)
+        tkr = yf.Ticker(ysym)
 
-        # info sometimes fails / is incomplete; don't crash the whole run
+        # Price from history (stable)
+        share_price = _last_close_price(tkr)
+
+        # Fundamentals from info (may be incomplete; don't crash)
         try:
-            info = ticker_data.get_info() or {}
+            info = tkr.get_info() or {}
         except Exception as e:
-            print(f"{raw_ticker} -> {y_ticker}: get_info() failed: {e}")
+            print(f"{raw} -> {ysym}: get_info failed: {e}")
             info = {}
 
-        # fast_info is a special object; access attributes safely
-        fast_info = getattr(ticker_data, "fast_info", None)
-
-        last_price = None
-        fast_mcap = None
-        if fast_info:
-            try:
-                last_price = getattr(fast_info, "last_price", None)
-            except Exception:
-                last_price = None
-            try:
-                fast_mcap = getattr(fast_info, "market_cap", None)
-            except Exception:
-                fast_mcap = None
-
-        share_price = _first_value(
-            {"last_price": last_price, **info},
-            ["last_price", "regularMarketPrice"],
-        )
-        market_cap = _first_value(
-            {"market_cap": fast_mcap, **info},
-            ["market_cap", "marketCap"],
-        )
-
+        market_cap = info.get("marketCap")
         enterprise_value = info.get("enterpriseValue")
         revenue = info.get("totalRevenue")
         ebitda = info.get("ebitda")
-        ebit = _first_value(info, ["ebit", "operatingIncome"])
+        ebit = info.get("ebit") or info.get("operatingIncome")
 
-        sheet.cell(row=row, column=headers["Share Price"]).value = share_price
-        sheet.cell(row=row, column=headers["Market Cap"]).value = _to_eurm(market_cap)
-        sheet.cell(row=row, column=headers["Enterprise Value"]).value = _to_eurm(enterprise_value)
-        sheet.cell(row=row, column=headers["Revenue LTM"]).value = _to_eurm(revenue)
-        sheet.cell(row=row, column=headers["EBITDA LTM"]).value = _to_eurm(ebitda)
+        ws.cell(row=row, column=headers["Share Price"]).value = share_price
+        ws.cell(row=row, column=headers["Market Cap"]).value = _to_eurm(market_cap)
+        ws.cell(row=row, column=headers["Enterprise Value"]).value = _to_eurm(enterprise_value)
+        ws.cell(row=row, column=headers["Revenue LTM"]).value = _to_eurm(revenue)
+        ws.cell(row=row, column=headers["EBITDA LTM"]).value = _to_eurm(ebitda)
 
-        ebit_cell = sheet.cell(row=row, column=headers["EBIT LTM"])
+        ebit_cell = ws.cell(row=row, column=headers["EBIT LTM"])
         ebit_value = _to_eurm(ebit)
         if ebit_value is None:
             ebit_cell.value = None
@@ -126,11 +108,12 @@ def main() -> None:
         else:
             ebit_cell.value = ebit_value
 
-        print(f"Filled {raw_ticker} (Yahoo: {y_ticker})")
+        print(f"Filled {raw} (Yahoo: {ysym}) price={share_price}")
 
-    workbook.save(OUTPUT_FILE)
-    print(f"Saved: {OUTPUT_FILE}")
+    wb.save(OUTPUT_FILE)
+    print(f"Saved {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":
     main()
+
