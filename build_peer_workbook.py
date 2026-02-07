@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 
 PEERS = [
     ("Aalberts", "AALB.AS", 1, "Closest diversified industrial technology peer"),
-    ("Duerr AG", "DUE.DE", 1, "Industrial automation and production systems peer"),
+    ("Dürr AG", "DUE.DE", 1, "Industrial automation/manufacturing systems exposure comparable to TKH"),
     ("Basler", "BSL.DE", 1, "Direct machine vision hardware/software comparable"),
     ("Cognex", "COGX", 1, "Global machine vision leader benchmark"),
     ("Jenoptik", "JEN.DE", 1, "Photonics and optical systems overlap"),
@@ -19,6 +19,7 @@ PEERS = [
     ("Fugro", "FUR.AS", 0, "Geo-data/offshore services, weaker industrial comparability"),
     ("SBM Offshore", "SBMO.AS", 0, "Project/offshore leasing model not close to TKH"),
     ("Vopak", "VPK.AS", 0, "Tank storage infrastructure, limited operating overlap"),
+    ("TKH (subject company)", "TWEKA.AS", 0, "Subject company reference (excluded from peer stats)"),
 ]
 
 
