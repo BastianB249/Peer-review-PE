@@ -3,7 +3,7 @@
 Recommended 8 peers selected for closest industrial technology comparability and usable LBO trading comps:
 
 - **Aalberts (AALB.AS)**: Closest diversified industrial technology peer.
-- **ASM International (ASMI.AS)**: Automation/advanced tech valuation anchor.
+- **Duerr AG (DUE.DE)**: Industrial automation and production systems peer.
 - **Basler (BSL.DE)**: Direct machine vision hardware/software comparable.
 - **Cognex (COGX)**: Global machine vision leader benchmark.
 - **Jenoptik (JEN.DE)**: Photonics and optical systems overlap.

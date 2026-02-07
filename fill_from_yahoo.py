@@ -18,7 +18,6 @@ MISSING_OPERATING_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 TICKER_MAP = {
     "COGX": "CGNX",  # Cognex on Yahoo
-    "ASMI.AS": "ASM.AS",  # ASM International on Yahoo
 }
 
 REVENUE_LABELS = ["Total Revenue", "TotalRevenue"]
