@@ -153,6 +153,115 @@ def _write_operating_value(ws, row: int, col: int, value: float | None) -> None:
         cell.value = _to_ccy_m(value)
 
 
+def _fetch_ticker_data(ysym: str) -> tuple[yf.Ticker | None, dict, pd.DataFrame]:
+    try:
+        tkr = yf.Ticker(ysym)
+    except Exception as exc:
+        print(f"{ysym}: ticker init failed: {exc}")
+        return None, {}, pd.DataFrame()
+
+    try:
+        info = tkr.get_info() or {}
+    except Exception as exc:
+        print(f"{ysym}: get_info failed: {exc}")
+        info = {}
+
+    try:
+        financials = tkr.financials
+    except Exception as exc:
+        print(f"{ysym}: financials failed: {exc}")
+        financials = pd.DataFrame()
+
+    return tkr, info, financials
+
+
+def _find_tkh_inputs_block(ws) -> int | None:
+    for row in range(1, ws.max_row + 1):
+        cell_value = ws.cell(row=row, column=1).value
+        if cell_value and str(cell_value).strip() == "TKH Inputs":
+            return row
+    return None
+
+
+def _parse_year_columns(ws, header_row: int) -> Dict[int, int]:
+    year_cols: Dict[int, int] = {}
+    for col in range(2, ws.max_column + 1):
+        header_value = ws.cell(row=header_row, column=col).value
+        if header_value is None or str(header_value).strip() == "":
+            continue
+        try:
+            year = int(str(header_value).strip())
+        except ValueError:
+            continue
+        year_cols[year] = col
+    return year_cols
+
+
+def _fill_tkh_inputs(ws, info: Dict[str, Any], financials: pd.DataFrame) -> None:
+    block_row = _find_tkh_inputs_block(ws)
+    if block_row is None:
+        print("TKH Inputs block not found; skipping.")
+        return
+
+    header_row = block_row + 1
+    first_metric_row = header_row + 1
+    year_cols = _parse_year_columns(ws, header_row)
+    if not year_cols:
+        print("TKH Inputs year headers not found; skipping.")
+        return
+
+    latest_year = max(year_cols)
+    prior_year = min(year_cols)
+
+    metric_rows: Dict[str, int] = {}
+    for row in range(first_metric_row, ws.max_row + 1):
+        label = ws.cell(row=row, column=1).value
+        if label is None or str(label).strip() == "":
+            break
+        metric_rows[str(label).strip()] = row
+
+    revenue_by_year = _extract_metric_by_year(financials, REVENUE_LABELS)
+    ebitda_by_year = _extract_metric_by_year(financials, EBITDA_LABELS)
+    ebit_by_year = _extract_metric_by_year(financials, EBIT_LABELS)
+
+    if not ebitda_by_year:
+        da_by_year = _extract_metric_by_year(financials, DA_LABELS)
+        for year in set(ebit_by_year) & set(da_by_year):
+            ebitda_by_year[year] = ebit_by_year[year] + da_by_year[year]
+
+    metric_sources = {
+        "Revenue (CCY m)": revenue_by_year,
+        "EBITDA (CCY m)": ebitda_by_year,
+        "EBIT (CCY m)": ebit_by_year,
+    }
+
+    for metric_label, data in metric_sources.items():
+        row = metric_rows.get(metric_label)
+        if row is None:
+            continue
+        for year, col in year_cols.items():
+            value = data.get(year)
+            ws.cell(row=row, column=col, value=_to_ccy_m(value))
+
+    net_debt_row = metric_rows.get("Net Debt (CCY m)")
+    if net_debt_row is not None:
+        net_debt_value = info.get("netDebt")
+        ws.cell(row=net_debt_row, column=year_cols[latest_year], value=_to_ccy_m(net_debt_value))
+
+    shares_row = metric_rows.get("Shares Outstanding (m)")
+    if shares_row is not None:
+        shares_value = info.get("sharesOutstanding") or info.get("floatShares")
+        shares_m = shares_value / 1_000_000 if shares_value else None
+        ws.cell(row=shares_row, column=year_cols[latest_year], value=shares_m)
+        if prior_year != latest_year:
+            ws.cell(row=shares_row, column=year_cols[prior_year], value=shares_m)
+
+    adjustments_row = metric_rows.get("Adjustments (CCY m)")
+    if adjustments_row is not None:
+        for col in year_cols.values():
+            ws.cell(row=adjustments_row, column=col, value=0)
+
+
 def main() -> None:
     wb = load_workbook(INPUT_FILE)
     ws = wb[SHEET_NAME]
@@ -182,43 +291,34 @@ def main() -> None:
 
     selected_col_exists = "Selected (1/0)" in base_cols
 
+    ticker_cache: Dict[str, tuple[yf.Ticker | None, Dict[str, Any], pd.DataFrame]] = {}
+
     for row in range(DATA_START_ROW, ws.max_row + 1):
         ticker_val = ws.cell(row=row, column=base_cols["Ticker"]).value
         if not ticker_val:
             continue
 
-        if selected_col_exists:
-            selected_val = ws.cell(row=row, column=base_cols["Selected (1/0)"]).value
-            if str(selected_val).strip() != "1":
-                continue
-
         raw = str(ticker_val).strip()
         ysym = _map_ticker(raw)
+        is_tkh = raw in {"TKH", "TWEKA.AS"} or ysym == "TWEKA.AS"
 
-        try:
-            tkr = yf.Ticker(ysym)
-        except Exception as exc:
-            print(f"{raw} -> {ysym}: ticker init failed: {exc}")
+        if selected_col_exists:
+            selected_val = ws.cell(row=row, column=base_cols["Selected (1/0)"]).value
+            if str(selected_val).strip() != "1" and not is_tkh:
+                continue
+
+        if ysym not in ticker_cache:
+            ticker_cache[ysym] = _fetch_ticker_data(ysym)
+
+        tkr, info, financials = ticker_cache[ysym]
+        if tkr is None:
             continue
 
         share_price = _last_close_price(tkr)
-
-        try:
-            info = tkr.get_info() or {}
-        except Exception as exc:
-            print(f"{raw} -> {ysym}: get_info failed: {exc}")
-            info = {}
-
         currency = info.get("currency")
         market_cap = info.get("marketCap")
         enterprise_value = info.get("enterpriseValue")
         net_debt = info.get("netDebt")
-
-        try:
-            financials = tkr.financials
-        except Exception as exc:
-            print(f"{raw} -> {ysym}: financials failed: {exc}")
-            financials = pd.DataFrame()
 
         revenue_by_year = _extract_metric_by_year(financials, REVENUE_LABELS)
         ebit_by_year = _extract_metric_by_year(financials, EBIT_LABELS)
@@ -229,6 +329,21 @@ def main() -> None:
             da_by_year = _extract_metric_by_year(financials, DA_LABELS)
             for year in set(ebit_by_year) & set(da_by_year):
                 ebitda_by_year[year] = ebit_by_year[year] + da_by_year[year]
+
+        if currency is None:
+            print(f"{raw} -> {ysym}: warning - missing currency")
+        if market_cap is None:
+            print(f"{raw} -> {ysym}: warning - missing market cap")
+        if enterprise_value is None:
+            print(f"{raw} -> {ysym}: warning - missing enterprise value")
+        if net_debt is None:
+            print(f"{raw} -> {ysym}: warning - missing net debt")
+        if not revenue_by_year:
+            print(f"{raw} -> {ysym}: warning - missing revenue in financials")
+        if not ebitda_by_year:
+            print(f"{raw} -> {ysym}: warning - missing EBITDA in financials")
+        if not ebit_by_year:
+            print(f"{raw} -> {ysym}: warning - missing EBIT in financials")
 
         # Write base cells
         ws.cell(row=row, column=base_cols["Currency"], value=currency)
@@ -244,6 +359,11 @@ def main() -> None:
             _write_operating_value(ws, row, group_cols[("EBIT (CCY m)", str(year))], ebit_by_year.get(year))
 
         print(f"Filled {raw} (Yahoo: {ysym})")
+
+    if "TWEKA.AS" not in ticker_cache:
+        ticker_cache["TWEKA.AS"] = _fetch_ticker_data("TWEKA.AS")
+    _, tkh_info, tkh_financials = ticker_cache["TWEKA.AS"]
+    _fill_tkh_inputs(ws, tkh_info, tkh_financials)
 
     wb.save(OUTPUT_FILE)
     print(f"Saved {OUTPUT_FILE}")
