@@ -10,15 +10,20 @@ from openpyxl.styles import PatternFill
 INPUT_FILE = "TKH_Peer_Analysis.xlsx"
 OUTPUT_FILE = "TKH_Peer_Analysis_filled.xlsx"
 SHEET_NAME = "Peer_Table"
+
 HEADER_ROW_1 = 1
 HEADER_ROW_2 = 2
 DATA_START_ROW = 3
 
 MISSING_OPERATING_FILL = PatternFill("solid", fgColor="FFF2CC")
 
+# Map “your” tickers -> Yahoo tickers when needed
 TICKER_MAP = {
-    "COGX": "CGNX",  # Cognex on Yahoo
-    "TKH": "TWEKA.AS",  # TKH Group on Yahoo
+    "COGX": "CGNX",        # Cognex
+    "ASMI.AS": "ASM.AS",   # ASM International
+    # Add TKH mapping only if your sheet uses "TKH" as ticker.
+    # If your sheet uses the correct Yahoo symbol already (e.g. TWEKA.AS), you don't need this.
+    "TKH": "TWEKA.AS",     # TKH Group
 }
 
 REVENUE_LABELS = ["Total Revenue", "TotalRevenue"]
@@ -36,6 +41,7 @@ def _map_ticker(ticker: str) -> str:
 
 
 def _to_ccy_m(value: Any) -> float | None:
+    """Convert absolute currency units -> currency millions."""
     if value in (None, ""):
         return None
     try:
@@ -45,16 +51,21 @@ def _to_ccy_m(value: Any) -> float | None:
 
 
 def _last_close_price(tkr: yf.Ticker) -> float | None:
+    """Get last close price from recent trading days (more robust than info)."""
     try:
         hist = tkr.history(period="5d")
         if hist is None or hist.empty:
             return None
-        return float(hist["Close"].dropna().iloc[-1])
+        close = hist["Close"].dropna()
+        if close.empty:
+            return None
+        return float(close.iloc[-1])
     except Exception:
         return None
 
 
 def _find_row_label(index: Iterable[Any], labels: Iterable[str]) -> Any | None:
+    """Find best-matching row label in a yfinance financials dataframe index."""
     label_map = {str(label).lower(): label for label in index}
     for candidate in labels:
         key = candidate.lower()
@@ -64,12 +75,14 @@ def _find_row_label(index: Iterable[Any], labels: Iterable[str]) -> Any | None:
 
 
 def _extract_metric_by_year(financials: pd.DataFrame, labels: Iterable[str]) -> Dict[int, float]:
+    """Return {year: value} for a given metric row from tkr.financials."""
     if financials is None or financials.empty:
         return {}
     row_label = _find_row_label(financials.index, labels)
     if row_label is None:
         return {}
     series = financials.loc[row_label]
+
     data: Dict[int, float] = {}
     for col, value in series.items():
         if pd.isna(value):
@@ -81,12 +94,16 @@ def _extract_metric_by_year(financials: pd.DataFrame, labels: Iterable[str]) -> 
                 year = int(str(col)[:4])
             except Exception:
                 continue
-        data[int(year)] = float(value)
+        try:
+            data[int(year)] = float(value)
+        except Exception:
+            continue
     return data
 
 
 def _extract_years(group_map: Dict[tuple[str, str], int], label: str) -> list[int]:
-    years = []
+    """Read available years from the 2-row header group map (e.g. Revenue (CCY m) / 2023, 2024)."""
+    years: list[int] = []
     for (group_label, year_label) in group_map:
         if group_label == label:
             try:
@@ -97,17 +114,33 @@ def _extract_years(group_map: Dict[tuple[str, str], int], label: str) -> list[in
 
 
 def _build_header_maps(ws) -> tuple[Dict[str, int], Dict[tuple[str, str], int]]:
+    """
+    Build:
+      base_cols: { "Ticker": col, ... } for columns whose row2 header is blank
+      group_cols: { ("Revenue (CCY m)", "2023"): col, ... } for grouped year columns
+
+    Handles merged cells in row1 where only the leftmost cell contains the group label.
+    """
     base_cols: Dict[str, int] = {}
     group_cols: Dict[tuple[str, str], int] = {}
+
+    last_header_1: str | None = None
+
     for col in range(1, ws.max_column + 1):
         header_1 = ws.cell(row=HEADER_ROW_1, column=col).value
         header_2 = ws.cell(row=HEADER_ROW_2, column=col).value
-        if header_1 is None:
+
+        if header_1 is not None and str(header_1).strip() != "":
+            last_header_1 = str(header_1).strip()
+
+        if last_header_1 is None:
             continue
-        if header_2 is None:
-            base_cols[str(header_1).strip()] = col
+
+        if header_2 is None or str(header_2).strip() == "":
+            base_cols[last_header_1] = col
         else:
-            group_cols[(str(header_1).strip(), str(header_2).strip())] = col
+            group_cols[(last_header_1, str(header_2).strip())] = col
+
     return base_cols, group_cols
 
 
@@ -126,7 +159,7 @@ def main() -> None:
 
     base_cols, group_cols = _build_header_maps(ws)
 
-    required = [
+    required_base = [
         "Ticker",
         "Currency",
         "Share Price (CCY)",
@@ -134,20 +167,32 @@ def main() -> None:
         "Enterprise Value (CCY m)",
         "Net Debt (CCY m)",
     ]
-    missing = [c for c in required if c not in base_cols]
+    missing = [c for c in required_base if c not in base_cols]
     if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+        raise ValueError(f"Missing required base columns (row {HEADER_ROW_1}): {missing}")
 
     years = _extract_years(group_cols, "Revenue (CCY m)")
     if len(years) < 2:
-        raise ValueError("Expected two fiscal years in the header.")
+        raise ValueError("Expected two fiscal years in the header for Revenue (CCY m).")
+
+    for y in years:
+        for group in ("Revenue (CCY m)", "EBITDA (CCY m)", "EBIT (CCY m)"):
+            if (group, str(y)) not in group_cols:
+                raise ValueError(f"Missing grouped column: {group} / {y}")
+
+    selected_col_exists = "Selected (1/0)" in base_cols
 
     for row in range(DATA_START_ROW, ws.max_row + 1):
-        ticker = ws.cell(row=row, column=base_cols["Ticker"]).value
-        if not ticker:
+        ticker_val = ws.cell(row=row, column=base_cols["Ticker"]).value
+        if not ticker_val:
             continue
 
-        raw = str(ticker).strip()
+        if selected_col_exists:
+            selected_val = ws.cell(row=row, column=base_cols["Selected (1/0)"]).value
+            if str(selected_val).strip() != "1":
+                continue
+
+        raw = str(ticker_val).strip()
         ysym = _map_ticker(raw)
 
         try:
@@ -179,26 +224,26 @@ def main() -> None:
         ebit_by_year = _extract_metric_by_year(financials, EBIT_LABELS)
         ebitda_by_year = _extract_metric_by_year(financials, EBITDA_LABELS)
 
+        # If EBITDA missing, try EBIT + D&A
         if not ebitda_by_year:
             da_by_year = _extract_metric_by_year(financials, DA_LABELS)
             for year in set(ebit_by_year) & set(da_by_year):
                 ebitda_by_year[year] = ebit_by_year[year] + da_by_year[year]
 
+        # Write base cells
         ws.cell(row=row, column=base_cols["Currency"], value=currency)
         ws.cell(row=row, column=base_cols["Share Price (CCY)"], value=share_price)
         ws.cell(row=row, column=base_cols["Market Cap (CCY m)"], value=_to_ccy_m(market_cap))
         ws.cell(row=row, column=base_cols["Enterprise Value (CCY m)"], value=_to_ccy_m(enterprise_value))
         ws.cell(row=row, column=base_cols["Net Debt (CCY m)"], value=_to_ccy_m(net_debt))
 
+        # Write year-group operating metrics
         for year in years:
-            revenue_col = group_cols[("Revenue (CCY m)", str(year))]
-            ebitda_col = group_cols[("EBITDA (CCY m)", str(year))]
-            ebit_col = group_cols[("EBIT (CCY m)", str(year))]
-            _write_operating_value(ws, row, revenue_col, revenue_by_year.get(year))
-            _write_operating_value(ws, row, ebitda_col, ebitda_by_year.get(year))
-            _write_operating_value(ws, row, ebit_col, ebit_by_year.get(year))
+            _write_operating_value(ws, row, group_cols[("Revenue (CCY m)", str(year))], revenue_by_year.get(year))
+            _write_operating_value(ws, row, group_cols[("EBITDA (CCY m)", str(year))], ebitda_by_year.get(year))
+            _write_operating_value(ws, row, group_cols[("EBIT (CCY m)", str(year))], ebit_by_year.get(year))
 
-        print(f"Filled {raw} (Yahoo: {ysym}) price={share_price}")
+        print(f"Filled {raw} (Yahoo: {ysym})")
 
     wb.save(OUTPUT_FILE)
     print(f"Saved {OUTPUT_FILE}")
