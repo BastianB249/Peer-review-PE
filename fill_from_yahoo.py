@@ -381,6 +381,7 @@ def main() -> None:
         "Market Cap (CCY m)",
         "Enterprise Value (CCY m)",
         "Net Debt (CCY m)",
+        "Equity Beta",
         "FX to EUR",
         "Share Price (EUR)",
         "Market Cap (EUR m)",
@@ -422,6 +423,7 @@ def main() -> None:
         market_cap = info.get("marketCap")
         enterprise_value = info.get("enterpriseValue")
         net_debt = _compute_net_debt(info, balance_sheet)
+        equity_beta = info.get("beta")
         fx_rate = _fetch_fx_rate(currency, fx_cache)
 
         revenue_by_year = _extract_metric_by_year(financials, REVENUE_LABELS)
@@ -442,6 +444,8 @@ def main() -> None:
             print(f"{raw} -> {ysym}: warning - missing enterprise value")
         if net_debt is None:
             print(f"{raw} -> {ysym}: warning - missing net debt")
+        if equity_beta is None:
+            print(f"{raw} -> {ysym}: warning - missing equity beta")
         if fx_rate is None:
             print(f"{raw} -> {ysym}: warning - missing FX rate to EUR")
         if not revenue_by_year:
@@ -457,6 +461,7 @@ def main() -> None:
         ws.cell(row=row, column=base_cols["Market Cap (CCY m)"], value=_to_ccy_m(market_cap))
         ws.cell(row=row, column=base_cols["Enterprise Value (CCY m)"], value=_to_ccy_m(enterprise_value))
         ws.cell(row=row, column=base_cols["Net Debt (CCY m)"], value=_to_ccy_m(net_debt))
+        ws.cell(row=row, column=base_cols["Equity Beta"], value=equity_beta)
         ws.cell(row=row, column=base_cols["FX to EUR"], value=fx_rate)
         ws.cell(
             row=row,
