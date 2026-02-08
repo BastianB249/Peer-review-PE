@@ -34,6 +34,20 @@ DA_LABELS = [
     "Depreciation And Amortization",
     "Depreciation/Amortization",
 ]
+TOTAL_DEBT_LABELS = [
+    "Total Debt",
+]
+DEBT_COMPONENT_LABELS = [
+    "Long Term Debt",
+    "Short Long Term Debt",
+    "Short Term Debt",
+    "Current Debt",
+]
+CASH_LABELS = [
+    "Cash And Cash Equivalents",
+    "Cash",
+    "Cash And Cash Equivalents Including Short Term Investments",
+]
 
 
 def _map_ticker(ticker: str) -> str:
@@ -101,6 +115,62 @@ def _extract_metric_by_year(financials: pd.DataFrame, labels: Iterable[str]) -> 
     return data
 
 
+def _latest_balance_sheet_column(balance_sheet: pd.DataFrame) -> Any | None:
+    if balance_sheet is None or balance_sheet.empty:
+        return None
+    columns = list(balance_sheet.columns)
+    if not columns:
+        return None
+    try:
+        return max(columns)
+    except Exception:
+        return columns[0]
+
+
+def _extract_balance_value(balance_sheet: pd.DataFrame, labels: Iterable[str]) -> float | None:
+    if balance_sheet is None or balance_sheet.empty:
+        return None
+    row_label = _find_row_label(balance_sheet.index, labels)
+    if row_label is None:
+        return None
+    latest_col = _latest_balance_sheet_column(balance_sheet)
+    if latest_col is None:
+        return None
+    value = balance_sheet.loc[row_label].get(latest_col)
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _compute_net_debt(info: Dict[str, Any], balance_sheet: pd.DataFrame) -> float | None:
+    net_debt = info.get("netDebt")
+    if net_debt not in (None, ""):
+        try:
+            return float(net_debt)
+        except Exception:
+            pass
+
+    total_debt = _extract_balance_value(balance_sheet, TOTAL_DEBT_LABELS)
+    if total_debt is None:
+        total_debt = 0.0
+        found = False
+        for label in DEBT_COMPONENT_LABELS:
+            component = _extract_balance_value(balance_sheet, [label])
+            if component is not None:
+                total_debt += component
+                found = True
+        if not found:
+            total_debt = None
+
+    cash_value = _extract_balance_value(balance_sheet, CASH_LABELS)
+    if total_debt is None or cash_value is None:
+        return None
+    return total_debt - cash_value
+
+
 def _extract_years(group_map: Dict[tuple[str, str], int], label: str) -> list[int]:
     """Read available years from the 2-row header group map (e.g. Revenue (CCY m) / 2023, 2024)."""
     years: list[int] = []
@@ -153,12 +223,12 @@ def _write_operating_value(ws, row: int, col: int, value: float | None) -> None:
         cell.value = _to_ccy_m(value)
 
 
-def _fetch_ticker_data(ysym: str) -> tuple[yf.Ticker | None, dict, pd.DataFrame]:
+def _fetch_ticker_data(ysym: str) -> tuple[yf.Ticker | None, dict, pd.DataFrame, pd.DataFrame]:
     try:
         tkr = yf.Ticker(ysym)
     except Exception as exc:
         print(f"{ysym}: ticker init failed: {exc}")
-        return None, {}, pd.DataFrame()
+        return None, {}, pd.DataFrame(), pd.DataFrame()
 
     try:
         info = tkr.get_info() or {}
@@ -172,7 +242,38 @@ def _fetch_ticker_data(ysym: str) -> tuple[yf.Ticker | None, dict, pd.DataFrame]
         print(f"{ysym}: financials failed: {exc}")
         financials = pd.DataFrame()
 
-    return tkr, info, financials
+    try:
+        balance_sheet = tkr.balance_sheet
+    except Exception as exc:
+        print(f"{ysym}: balance sheet failed: {exc}")
+        balance_sheet = pd.DataFrame()
+
+    return tkr, info, financials, balance_sheet
+
+
+def _fetch_fx_rate(ccy: str | None, fx_cache: Dict[str, float]) -> float | None:
+    if not ccy:
+        return None
+    if ccy == "EUR":
+        return 1.0
+    if ccy in fx_cache:
+        return fx_cache[ccy]
+
+    direct_symbol = f"{ccy}EUR=X"
+    direct_ticker = yf.Ticker(direct_symbol)
+    direct_rate = _last_close_price(direct_ticker)
+    if direct_rate is not None:
+        fx_cache[ccy] = float(direct_rate)
+        return fx_cache[ccy]
+
+    inverse_symbol = f"EUR{ccy}=X"
+    inverse_ticker = yf.Ticker(inverse_symbol)
+    inverse_rate = _last_close_price(inverse_ticker)
+    if inverse_rate is not None:
+        fx_cache[ccy] = 1.0 / float(inverse_rate)
+        return fx_cache[ccy]
+
+    return None
 
 
 def _find_tkh_inputs_block(ws) -> int | None:
@@ -197,7 +298,12 @@ def _parse_year_columns(ws, header_row: int) -> Dict[int, int]:
     return year_cols
 
 
-def _fill_tkh_inputs(ws, info: Dict[str, Any], financials: pd.DataFrame) -> None:
+def _fill_tkh_inputs(
+    ws,
+    info: Dict[str, Any],
+    financials: pd.DataFrame,
+    balance_sheet: pd.DataFrame,
+) -> None:
     block_row = _find_tkh_inputs_block(ws)
     if block_row is None:
         print("TKH Inputs block not found; skipping.")
@@ -245,7 +351,7 @@ def _fill_tkh_inputs(ws, info: Dict[str, Any], financials: pd.DataFrame) -> None
 
     net_debt_row = metric_rows.get("Net Debt (CCY m)")
     if net_debt_row is not None:
-        net_debt_value = info.get("netDebt")
+        net_debt_value = _compute_net_debt(info, balance_sheet)
         ws.cell(row=net_debt_row, column=year_cols[latest_year], value=_to_ccy_m(net_debt_value))
 
     shares_row = metric_rows.get("Shares Outstanding (m)")
@@ -275,6 +381,11 @@ def main() -> None:
         "Market Cap (CCY m)",
         "Enterprise Value (CCY m)",
         "Net Debt (CCY m)",
+        "FX to EUR",
+        "Share Price (EUR)",
+        "Market Cap (EUR m)",
+        "Enterprise Value (EUR m)",
+        "Net Debt (EUR m)",
     ]
     missing = [c for c in required_base if c not in base_cols]
     if missing:
@@ -289,9 +400,8 @@ def main() -> None:
             if (group, str(y)) not in group_cols:
                 raise ValueError(f"Missing grouped column: {group} / {y}")
 
-    selected_col_exists = "Selected (1/0)" in base_cols
-
-    ticker_cache: Dict[str, tuple[yf.Ticker | None, Dict[str, Any], pd.DataFrame]] = {}
+    ticker_cache: Dict[str, tuple[yf.Ticker | None, Dict[str, Any], pd.DataFrame, pd.DataFrame]] = {}
+    fx_cache: Dict[str, float] = {}
 
     for row in range(DATA_START_ROW, ws.max_row + 1):
         ticker_val = ws.cell(row=row, column=base_cols["Ticker"]).value
@@ -300,17 +410,10 @@ def main() -> None:
 
         raw = str(ticker_val).strip()
         ysym = _map_ticker(raw)
-        is_tkh = raw in {"TKH", "TWEKA.AS"} or ysym == "TWEKA.AS"
-
-        if selected_col_exists:
-            selected_val = ws.cell(row=row, column=base_cols["Selected (1/0)"]).value
-            if str(selected_val).strip() != "1" and not is_tkh:
-                continue
-
         if ysym not in ticker_cache:
             ticker_cache[ysym] = _fetch_ticker_data(ysym)
 
-        tkr, info, financials = ticker_cache[ysym]
+        tkr, info, financials, balance_sheet = ticker_cache[ysym]
         if tkr is None:
             continue
 
@@ -318,7 +421,8 @@ def main() -> None:
         currency = info.get("currency")
         market_cap = info.get("marketCap")
         enterprise_value = info.get("enterpriseValue")
-        net_debt = info.get("netDebt")
+        net_debt = _compute_net_debt(info, balance_sheet)
+        fx_rate = _fetch_fx_rate(currency, fx_cache)
 
         revenue_by_year = _extract_metric_by_year(financials, REVENUE_LABELS)
         ebit_by_year = _extract_metric_by_year(financials, EBIT_LABELS)
@@ -338,6 +442,8 @@ def main() -> None:
             print(f"{raw} -> {ysym}: warning - missing enterprise value")
         if net_debt is None:
             print(f"{raw} -> {ysym}: warning - missing net debt")
+        if fx_rate is None:
+            print(f"{raw} -> {ysym}: warning - missing FX rate to EUR")
         if not revenue_by_year:
             print(f"{raw} -> {ysym}: warning - missing revenue in financials")
         if not ebitda_by_year:
@@ -351,6 +457,31 @@ def main() -> None:
         ws.cell(row=row, column=base_cols["Market Cap (CCY m)"], value=_to_ccy_m(market_cap))
         ws.cell(row=row, column=base_cols["Enterprise Value (CCY m)"], value=_to_ccy_m(enterprise_value))
         ws.cell(row=row, column=base_cols["Net Debt (CCY m)"], value=_to_ccy_m(net_debt))
+        ws.cell(row=row, column=base_cols["FX to EUR"], value=fx_rate)
+        ws.cell(
+            row=row,
+            column=base_cols["Share Price (EUR)"],
+            value=share_price * fx_rate if share_price is not None and fx_rate is not None else None,
+        )
+        ws.cell(
+            row=row,
+            column=base_cols["Market Cap (EUR m)"],
+            value=_to_ccy_m(market_cap) * fx_rate
+            if market_cap is not None and fx_rate is not None
+            else None,
+        )
+        ws.cell(
+            row=row,
+            column=base_cols["Enterprise Value (EUR m)"],
+            value=_to_ccy_m(enterprise_value) * fx_rate
+            if enterprise_value is not None and fx_rate is not None
+            else None,
+        )
+        ws.cell(
+            row=row,
+            column=base_cols["Net Debt (EUR m)"],
+            value=_to_ccy_m(net_debt) * fx_rate if net_debt is not None and fx_rate is not None else None,
+        )
 
         # Write year-group operating metrics
         for year in years:
@@ -362,8 +493,8 @@ def main() -> None:
 
     if "TWEKA.AS" not in ticker_cache:
         ticker_cache["TWEKA.AS"] = _fetch_ticker_data("TWEKA.AS")
-    _, tkh_info, tkh_financials = ticker_cache["TWEKA.AS"]
-    _fill_tkh_inputs(ws, tkh_info, tkh_financials)
+    _, tkh_info, tkh_financials, tkh_balance = ticker_cache["TWEKA.AS"]
+    _fill_tkh_inputs(ws, tkh_info, tkh_financials, tkh_balance)
 
     wb.save(OUTPUT_FILE)
     print(f"Saved {OUTPUT_FILE}")
