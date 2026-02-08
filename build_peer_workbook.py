@@ -47,6 +47,7 @@ def main() -> None:
         "Market Cap (CCY m)",
         "Enterprise Value (CCY m)",
         "Net Debt (CCY m)",
+        "Equity Beta",
         "FX to EUR",
         "Share Price (EUR)",
         "Market Cap (EUR m)",
@@ -209,7 +210,9 @@ def main() -> None:
         col_letter = get_column_letter(col)
         range_ref = f"{col_letter}{data_start_row}:{col_letter}{data_end_row}"
         avg_formula = f"=IFERROR(AVERAGEIF({selected_range},1,{range_ref}),\"\")"
-        median_formula = f"=IFERROR(MEDIAN(IF(({selected_range}=1)*({range_ref}<>\"\"),{range_ref})),\"\")"
+        median_formula = (
+            f"=IFERROR(MEDIAN(FILTER({range_ref},({selected_range}=1)*({range_ref}<>\"\"))),\"\")"
+        )
         sheet.cell(row=avg_row, column=col, value=avg_formula)
         sheet.cell(row=median_row, column=col, value=median_formula)
 
@@ -232,6 +235,8 @@ def main() -> None:
     ]
 
     input_cells: Dict[str, Dict[str, str]] = {}
+    ticker_col = base_map["Ticker"]
+    tkh_match = f"MATCH(\"TWEKA.AS\",{_cell(ticker_col, data_start_row)}:{_cell(ticker_col, data_end_row)},0)"
     for idx, (label, key) in enumerate(input_rows, start=1):
         row = input_header_row + idx
         sheet.cell(row=row, column=1, value=label)
@@ -240,11 +245,23 @@ def main() -> None:
                 "prior": _cell(2, row),
                 "latest": _cell(3, row),
             }
+            for year_col, year in zip((2, 3), (prior_year, latest_year)):
+                source_col = group_map[(label, year)]
+                source_range = f"{_cell(source_col, data_start_row)}:{_cell(source_col, data_end_row)}"
+                sheet.cell(
+                    row=row,
+                    column=year_col,
+                    value=f"=IFERROR(INDEX({source_range},{tkh_match}),\"\")",
+                )
         else:
             cell_ref = _cell(3, row)
             input_cells[key] = {"value": cell_ref}
             if key == "adjustments":
                 sheet.cell(row=row, column=3, value=0)
+            if key == "net_debt":
+                source_col = base_map["Net Debt (CCY m)"]
+                source_range = f"{_cell(source_col, data_start_row)}:{_cell(source_col, data_end_row)}"
+                sheet.cell(row=row, column=3, value=f"=IFERROR(INDEX({source_range},{tkh_match}),\"\")")
 
     valuation_start = input_header_row + len(input_rows) + 3
     sheet.cell(row=valuation_start, column=1, value="TKH valuation (Selected peers)")
@@ -373,6 +390,118 @@ def main() -> None:
     for row, values in enumerate(instructions_data, start=1):
         for col, value in enumerate(values, start=1):
             instructions.cell(row=row, column=col, value=value)
+
+    wacc = workbook.create_sheet(title="WACC_Model")
+    wacc_headers = [
+        "Company",
+        "Ticker",
+        "Selected (1/0)",
+        "Equity Beta",
+        "Net Debt (CCY m)",
+        "Market Cap (CCY m)",
+        "Debt/Equity",
+        "Unlevered Beta",
+    ]
+    for col, header in enumerate(wacc_headers, start=1):
+        wacc.cell(row=1, column=col, value=header).font = Font(bold=True)
+
+    for idx, _ in enumerate(PEERS, start=0):
+        peer_row = data_start_row + idx
+        wacc_row = 2 + idx
+        for col, header in enumerate(wacc_headers, start=1):
+            if header in base_map:
+                source_col = base_map[header]
+                wacc.cell(row=wacc_row, column=col, value=f"=Peer_Table!{_cell(source_col, peer_row)}")
+        wacc.cell(row=wacc_row, column=1, value=f"=Peer_Table!{_cell(base_map['Company'], peer_row)}")
+        wacc.cell(row=wacc_row, column=2, value=f"=Peer_Table!{_cell(base_map['Ticker'], peer_row)}")
+        wacc.cell(row=wacc_row, column=3, value=f"=Peer_Table!{_cell(base_map['Selected (1/0)'], peer_row)}")
+        wacc.cell(row=wacc_row, column=4, value=f"=Peer_Table!{_cell(base_map['Equity Beta'], peer_row)}")
+        wacc.cell(row=wacc_row, column=5, value=f"=Peer_Table!{_cell(base_map['Net Debt (CCY m)'], peer_row)}")
+        wacc.cell(row=wacc_row, column=6, value=f"=Peer_Table!{_cell(base_map['Market Cap (CCY m)'], peer_row)}")
+        wacc.cell(
+            row=wacc_row,
+            column=7,
+            value=f"=IF(OR(F{wacc_row}=\"\",F{wacc_row}=0,E{wacc_row}=\"\"),\"\",E{wacc_row}/F{wacc_row})",
+        )
+
+    input_start = len(PEERS) + 4
+    wacc.cell(row=input_start, column=1, value="WACC Inputs").font = Font(bold=True)
+    inputs = [
+        ("Risk-free rate", 0.03),
+        ("Market risk premium", 0.045),
+        ("Small firm premium", 0.0125),
+        ("Marginal tax rate", 0.25),
+        ("Cost of debt (pre-tax)", 0.05),
+        ("Target debt / equity", 0.25),
+    ]
+    for idx, (label, default) in enumerate(inputs, start=1):
+        row = input_start + idx
+        wacc.cell(row=row, column=1, value=label)
+        wacc.cell(row=row, column=2, value=default)
+
+    summary_start = input_start + len(inputs) + 2
+    wacc.cell(row=summary_start, column=1, value="Selected peers beta summary").font = Font(bold=True)
+    wacc.cell(row=summary_start + 1, column=1, value="Average equity beta")
+    wacc.cell(row=summary_start + 2, column=1, value="Median equity beta")
+    wacc.cell(row=summary_start + 3, column=1, value="Average unlevered beta")
+    wacc.cell(row=summary_start + 4, column=1, value="Median unlevered beta")
+
+    selected_range_wacc = f"C2:C{len(PEERS)+1}"
+    equity_beta_range = f"D2:D{len(PEERS)+1}"
+    unlevered_start_row = 2
+    tax_rate_cell = f"B{input_start + 4}"
+    for idx in range(len(PEERS)):
+        row = unlevered_start_row + idx
+        wacc.cell(
+            row=row,
+            column=8,
+            value=f"=IF(OR(D{row}=\"\",G{row}=\"\"),\"\",D{row}/(1+(1-{tax_rate_cell})*G{row}))",
+        )
+
+    unlevered_range = f"H2:H{len(PEERS)+1}"
+    wacc.cell(
+        row=summary_start + 1,
+        column=2,
+        value=f"=IFERROR(AVERAGEIF({selected_range_wacc},1,{equity_beta_range}),\"\")",
+    )
+    wacc.cell(
+        row=summary_start + 2,
+        column=2,
+        value=f"=IFERROR(MEDIAN(FILTER({equity_beta_range},({selected_range_wacc}=1)*({equity_beta_range}<>\"\"))),\"\")",
+    )
+    wacc.cell(
+        row=summary_start + 3,
+        column=2,
+        value=f"=IFERROR(AVERAGEIF({selected_range_wacc},1,{unlevered_range}),\"\")",
+    )
+    wacc.cell(
+        row=summary_start + 4,
+        column=2,
+        value=f"=IFERROR(MEDIAN(FILTER({unlevered_range},({selected_range_wacc}=1)*({unlevered_range}<>\"\"))),\"\")",
+    )
+
+    calc_start = summary_start + 6
+    wacc.cell(row=calc_start, column=1, value="WACC Calculation").font = Font(bold=True)
+    calc_rows = [
+        ("Relevered beta", f"=B{summary_start + 3}*(1+(1-B{input_start + 4})*B{input_start + 6})"),
+        ("Cost of equity", f"=B{input_start + 1}+B{input_start + 2}*B{calc_start + 1}+B{input_start + 3}"),
+        ("Cost of debt (after-tax)", f"=B{input_start + 5}*(1-B{input_start + 4})"),
+        ("Target debt weight", f"=B{input_start + 6}/(1+B{input_start + 6})"),
+        ("Target equity weight", f"=1-B{calc_start + 4}"),
+        (
+            "WACC",
+            f"=B{calc_start + 2}*B{calc_start + 5}+B{calc_start + 3}*B{calc_start + 4}",
+        ),
+    ]
+    for idx, (label, formula) in enumerate(calc_rows, start=1):
+        row = calc_start + idx
+        wacc.cell(row=row, column=1, value=label)
+        wacc.cell(row=row, column=2, value=formula)
+
+    wacc.column_dimensions["A"].width = 28
+    wacc.column_dimensions["B"].width = 18
+    for col in range(3, 9):
+        wacc.column_dimensions[get_column_letter(col)].width = 18
 
     workbook.save("TKH_Peer_Analysis.xlsx")
 
