@@ -47,6 +47,11 @@ def main() -> None:
         "Market Cap (CCY m)",
         "Enterprise Value (CCY m)",
         "Net Debt (CCY m)",
+        "FX to EUR",
+        "Share Price (EUR)",
+        "Market Cap (EUR m)",
+        "Enterprise Value (EUR m)",
+        "Net Debt (EUR m)",
     ]
 
     operating_groups = [
@@ -342,6 +347,11 @@ def main() -> None:
         7: 18,
         8: 20,
         9: 18,
+        10: 10,
+        11: 18,
+        12: 20,
+        13: 22,
+        14: 18,
     }
     for col, width in column_widths.items():
         sheet.column_dimensions[get_column_letter(col)].width = width
@@ -356,7 +366,7 @@ def main() -> None:
         ["Suggested data sources", "Bloomberg, Capital IQ, FactSet, Refinitiv, or Yahoo Finance."],
         [
             "Units",
-            "Market Cap/EV/Revenue/EBITDA/EBIT/Net Debt are stored in CCY m; shares in m.",
+            "Market Cap/EV/Revenue/EBITDA/EBIT/Net Debt are stored in CCY m; shares in m; EUR columns use FX.",
         ],
         ["Selection result", "Rows with Selected=1 drive the peer summary and valuation block."],
     ]
