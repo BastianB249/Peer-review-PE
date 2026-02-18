@@ -1,0 +1,10 @@
+ticker,region,wrds_db,identifier_type,identifier_value,notes
+AALB.AS,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+DUE.DE,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+BSL.DE,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+CGNX,US,comp_na,gvkey,,TODO: fill gvkey from WRDS
+JEN.DE,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+HUBN.SW,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+NKT.CO,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+MRN.PA,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+TWEKA.AS,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS

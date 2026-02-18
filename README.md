@@ -1,21 +1,51 @@
 # Peer-review-PE
 
-## Workbook build
+Submission-grade peer + WACC workbook pipeline for TKH.
 
-Generate the formatted peer analysis workbook template:
+## Repository structure
+
+- `inputs/peer_universe.csv` – peer list, selection flags, optional `gvkey`, segment fit, rationale.
+- `inputs/wrds_mapping.csv` – WRDS lookup mapping per ticker (`wrds_db`, `identifier_type`, `identifier_value`).
+- `inputs/data_overrides.csv` – optional reproducible manual overrides.
+- `scripts/build_peer_model.py` – single entrypoint.
+- `outputs/` – local generated artifacts (kept out of git).
+
+## Build command
 
 ```bash
-py build_peer_workbook.py
+python -m scripts.build_peer_model
 ```
 
-## Yahoo Finance fill
+Pipeline order:
+1. Parse peers + WRDS mapping.
+2. Attempt WRDS pull (default priority when `WRDS_USERNAME` is set and mapping exists).
+3. Fill missing fields from Yahoo fallback only when WRDS does not provide those fields.
+4. Apply overrides.
+5. Build workbook with `Peer_Table`, `WACC_Model`, `Sources_and_AsOf`, `QC_Report`, `Peer_Rationale`, `Clean_Overview`.
 
-Install dependencies and populate peer rows using Yahoo Finance:
+## Smoke tests
 
+### Fallback mode (no WRDS)
 ```bash
-py -m pip install -r requirements.txt
-py fill_from_yahoo.py
+unset WRDS_USERNAME
+python -m scripts.build_peer_model
 ```
 
-The fill script writes `TKH_Peer_Analysis_filled.xlsx`.
-It also supports the TKH Group row (including the `TKH` → `TWEKA.AS` mapping) and fills the TKH Inputs block.
+### WRDS mode (partial mapping still allowed)
+```bash
+export WRDS_USERNAME=Bastianuser
+python -m scripts.build_peer_model
+```
+
+If WRDS mappings are incomplete (`identifier_value` blank), those peers automatically fall back and are clearly tagged in `Sources_and_AsOf` and logs.
+
+## Notes
+
+- WRDS credentials must stay outside the repo (`.pgpass` or WRDS auth flow).
+- EV mode toggle is in script config (`USE_PROVIDER_EV_AS_TRUTH`).
+- Mixed sources are controlled by `ALLOW_MIXED_SOURCES`.
+- KPMG ERP/SFP values should be manually confirmed and entered in script assumptions.
+
+## GitHub PR note
+
+Binary Excel outputs are intentionally not committed. Generate `outputs/TKH_Peer_Analysis_submission_ready.xlsx` locally before submission/upload.

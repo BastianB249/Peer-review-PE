@@ -1,0 +1,10 @@
+company,ticker,gvkey,selected,core_set,segment_fit,peer_status,selection_rationale
+Aalberts,AALB.AS,,1,1,Automation|Connectivity,Core,Closest diversified industrial technology peer
+Dürr AG,DUE.DE,,1,1,Automation,Core,Industrial automation/manufacturing systems exposure comparable to TKH
+Basler,BSL.DE,,1,0,Vision,Segment-only,Machine vision pure-play (segment comparable but volatile)
+Cognex,CGNX,,1,0,Vision,Segment-only,Global machine vision benchmark (premium valuation profile)
+Jenoptik,JEN.DE,,1,1,Vision|Automation,Core,Photonics and optical systems overlap with smart vision/inspection
+Huber+Suhner,HUBN.SW,,1,1,Connectivity,Core,Connectivity and industrial cabling exposure
+NKT,NKT.CO,,0,0,Electrification,Excluded,Electrification-heavy business and weaker fit if segment is divested
+Mersen,MRN.PA,,0,0,Electrification|Components,Excluded,Electrical materials/components with weaker systems overlap
+TKH (subject company),TWEKA.AS,,0,0,TKH subject,Excluded,Subject company reference (excluded from peer stats)
