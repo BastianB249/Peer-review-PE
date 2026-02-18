@@ -1,21 +1,43 @@
 # Peer-review-PE
 
-## Workbook build
+Submission-grade peer + WACC workbook pipeline for TKH.
 
-Generate the formatted peer analysis workbook template:
+## Repository structure
+
+- `inputs/peer_universe.csv` – peer list, selection flags, segment fit, and rationale.
+- `inputs/data_overrides.csv` – optional manual overrides (kept empty by default).
+- `scripts/build_peer_model.py` – single entrypoint that fetches data, builds workbook, and runs QC.
+- `outputs/` – local generated artifacts (kept out of git; run build command to regenerate).
+
+## Build command
 
 ```bash
-py build_peer_workbook.py
+python -m scripts.build_peer_model
 ```
 
-## Yahoo Finance fill
+This command:
+1. Loads peer inputs.
+2. Attempts WRDS connectivity (if `WRDS_USERNAME` is configured).
+3. Pulls market + financial data from fallback provider where needed.
+4. Writes the workbook with:
+   - `Clean_Overview`
+   - `Peer_Table`
+   - `WACC_Model`
+   - `Sources_and_AsOf`
+   - `QC_Report`
+   - `Peer_Rationale`
+5. Saves logs for reproducibility.
 
-Install dependencies and populate peer rows using Yahoo Finance:
+## Notes
 
-```bash
-py -m pip install -r requirements.txt
-py fill_from_yahoo.py
-```
+- EV reconciliation supports two modes in `scripts/build_peer_model.py`:
+  - `USE_PROVIDER_EV_AS_TRUTH = True`
+  - `USE_PROVIDER_EV_AS_TRUTH = False` (compute EV internally from Market Cap + Net Debt)
+- If source fields are unavailable, the model writes explicit `MISSING SOURCE` flags.
+- KPMG-based ERP/SFP assumptions are surfaced with source-note cells and are intended for manual confirmation if network access is restricted.
 
-The fill script writes `TKH_Peer_Analysis_filled.xlsx`.
-It also supports the TKH Group row (including the `TKH` → `TWEKA.AS` mapping) and fills the TKH Inputs block.
+
+## GitHub PR note
+
+Binary Excel outputs are intentionally not committed.
+Generate `outputs/TKH_Peer_Analysis_submission_ready.xlsx` locally before submission/upload.
