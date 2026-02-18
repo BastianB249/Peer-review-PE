@@ -5,3 +5,9 @@ __pycache__/
 # Generated outputs (build locally)
 outputs/*.xlsx
 outputs/*.log
+
+# Local artifacts
+*.xlsx
+cd
+git
+
