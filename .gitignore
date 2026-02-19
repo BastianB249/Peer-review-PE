@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 
-# Generated outputs (build locally)
+# Ignore generated outputs by default
 outputs/*.xlsx
 outputs/*.log
+
+# But explicitly allow the submission-ready workbook
+!outputs/TKH_Peer_Analysis_submission_ready.xlsx
