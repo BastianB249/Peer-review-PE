@@ -1,15 +1,12 @@
 # Changelog
 
-## 2026-02-18
-- Rebuilt the peer analysis process into a reproducible pipeline with a single entry point: `python -m scripts.build_peer_model`.
-- Added structured project folders: `inputs/`, `outputs/`, and `scripts/`.
-- Added a submission-ready workbook output: `outputs/TKH_Peer_Analysis_submission_ready.xlsx`.
-- Added workbook sheets for transparency and control: `Clean_Overview`, `Sources_and_AsOf`, `QC_Report`, and `Peer_Rationale`.
-- Added quality-control logic for EV reconciliation, scaling outliers, missing fields/denominator checks, year-over-year consistency, and loss-making flags.
-- Upgraded WACC with explicit methodology assumptions, mean + median beta statistics, and median-default headline WACC.
-
-## 2026-02-18 (follow-up)
-- Removed generated binary and cache artifacts from version control (`.xlsx`, build log, `__pycache__`).
-- Added `.gitignore` rules to prevent re-adding generated outputs/caches.
-- Kept `outputs/.gitkeep` so the output directory exists while artifacts are built locally.
-- Updated README with guidance for local workbook generation when PR tooling blocks binary files.
+## 2026-02-18 (WRDS integration fix)
+- Replaced placeholder WRDS connectivity-only logic with real WRDS fundamentals pull in `scripts/build_peer_model.py`.
+- Added `fetch_from_wrds(...)` that queries Compustat North America (`comp.funda`) or Compustat Global (`compg.g_funda`) by mapped `gvkey` for FY 2023/2024.
+- Implemented deterministic row selection when multiple WRDS rows exist (latest `datadate` per `fyear` after statement filters).
+- Added robust WRDS mapping file `inputs/wrds_mapping.csv` with required fields (`ticker, region, wrds_db, identifier_type, identifier_value, notes`).
+- Updated `inputs/peer_universe.csv` to include optional `gvkey` column for reproducibility.
+- Made WRDS default source when configured; Yahoo now fills market fields and only missing WRDS fields (if `ALLOW_MIXED_SOURCES=True`).
+- Extended `Sources_and_AsOf` with WRDS pull status section (connected, mapping coverage, per-peer status) and per-field source tracking.
+- Preserved QC behavior (no silent auto-fixes); missing/scaling/reconciliation issues remain visible in `QC_Report`.
+- Updated README with fallback and WRDS smoke-test commands.
