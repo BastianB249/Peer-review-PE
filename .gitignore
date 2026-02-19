@@ -8,3 +8,4 @@ outputs/*.log
 
 # But explicitly allow the submission-ready workbook
 !outputs/TKH_Peer_Analysis_submission_ready.xlsx
+
