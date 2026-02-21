@@ -1,1 +1,11 @@
 ticker,field,year,value,source
+AALB.AS,equity_beta,,1.264,Previous Yahoo pull
+DUE.DE,equity_beta,,1.33,Previous Yahoo pull
+BSL.DE,equity_beta,,2.419,Previous Yahoo pull
+CGNX,equity_beta,,1.534,Previous Yahoo pull
+JEN.DE,equity_beta,,1.25,Previous Yahoo pull
+HUBN.SW,equity_beta,,0.725,Previous Yahoo pull
+NKT.CO,equity_beta,,0.68,Previous Yahoo pull
+MRN.PA,equity_beta,,1.331,Previous Yahoo pull
+TWEKA.AS,equity_beta,,0.99,Previous Yahoo pull
+HUBN.SW,fx_to_eur,,1.0953,Previous Yahoo pull
