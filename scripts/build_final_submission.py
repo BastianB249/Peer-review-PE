@@ -63,6 +63,17 @@ def build_wacc(ws):
     ws['D7'] = -165.2416
     for r in range(2, 11):
         ws[f'F{r}'] = f'=IFERROR(D{r}/E{r},"")'
+    ws['F2'] = '=IFERROR(D2/E2,"")'
+    ws['F3'] = '=IFERROR(D3/E3,"")'
+    ws['F4'] = '=IFERROR(D4/E4,"")'
+    ws['F5'] = '=IFERROR(D5/E5,"")'
+    ws['F6'] = '=IFERROR(D6/E6,"")'
+    ws['F7'] = '=IFERROR(D7/E7,"")'
+    ws['F8'] = '=IFERROR(D8/E8,"")'
+    ws['F9'] = '=IFERROR(D9/E9,"")'
+    ws['F10'] = '=IFERROR(D10/E10,"")'
+
+    for r in range(2, 11):
         ws[f'G{r}'] = f'=IFERROR(C{r}/(1+(1-0.25)*F{r}),"")'
 
     ws['B14'] = '=AVERAGEIF(B2:B10,1,C2:C10)'
@@ -96,6 +107,7 @@ def build_cca(wb_src, wb_dst):
         'Revenue 2024 (EUR m)', 'EBITDA 2024 (EUR m)', 'EBIT 2024 (EUR m)',
         'EV/Sales 2023', 'EV/EBITDA 2023', 'EV/EBIT 2023',
         'EV/Sales 2024', 'EV/EBITDA 2024', 'EV/EBIT 2024',
+        'EV/Sales 2024', 'EV/EBITDA 2024', 'EV/EBIT 2024'
     ]
 
     ws.merge_cells('A1:V1')
@@ -174,6 +186,45 @@ def build_cca(wb_src, wb_dst):
         ws[f'U{out_row}'] = f'=IFERROR(I{out_row}/O{out_row},"")'
         ws[f'V{out_row}'] = f'=IFERROR(I{out_row}/P{out_row},"")'
 
+        c = ws.cell(3, i, h)
+        c.fill = HEADER_FILL
+        c.font = WHITE_FONT
+        c.alignment = Alignment(horizontal='center', wrap_text=True)
+
+    # rows 2-10 in source include peers + subject
+    out_row = 4
+    peer_rows = []
+    for r in range(2, 11):
+        name = src.cell(r, 1).value
+        role = 'Subject' if 'subject' in str(name).lower() else 'Peer'
+        ws.cell(out_row, 1, name)
+        ws.cell(out_row, 2, src.cell(r, 2).value)
+        ws.cell(out_row, 3, role)
+        ws.cell(out_row, 4, 1)
+        ws.cell(out_row, 5, src.cell(r, 8).value)
+        ws.cell(out_row, 6, src.cell(r, 16).value)
+        ws.cell(out_row, 7, src.cell(r, 9).value)
+
+        ws.cell(out_row, 8, f'=IFERROR(J{out_row}*F{out_row},"")')
+        ws.cell(out_row, 9, f'=IFERROR(K{out_row}*F{out_row},"")')
+        ws.cell(out_row, 10, f'=IFERROR(N{out_row}*F{out_row},"")')
+
+        ws.cell(out_row, 11, f'=IFERROR(Q{out_row}*F{out_row},"")')
+        ws.cell(out_row, 12, f'=IFERROR(R{out_row}*F{out_row},"")')
+        ws.cell(out_row, 13, f'=IFERROR(S{out_row}*F{out_row},"")')
+        ws.cell(out_row, 14, f'=IFERROR(W{out_row}*F{out_row},"")')
+        ws.cell(out_row, 15, f'=IFERROR(X{out_row}*F{out_row},"")')
+        ws.cell(out_row, 16, f'=IFERROR(Y{out_row}*F{out_row},"")')
+
+        for c_src, c_dst in [(10, 'J'), (11, 'K'), (14, 'N'), (17, 'Q'), (18, 'R'), (19, 'S'), (23, 'W'), (24, 'X'), (25, 'Y')]:
+            ws[f'{c_dst}{out_row}'] = src.cell(r, c_src).value
+
+        ws.cell(out_row, 17, f'=IFERROR(I{out_row}/K{out_row},"")')
+        ws.cell(out_row, 18, f'=IFERROR(I{out_row}/L{out_row},"")')
+        ws.cell(out_row, 19, f'=IFERROR(I{out_row}/M{out_row},"")')
+        ws.cell(out_row, 20, f'=IFERROR(I{out_row}/N{out_row},"")')
+        ws.cell(out_row, 21, f'=IFERROR(I{out_row}/O{out_row},"")')
+        ws.cell(out_row, 22, f'=IFERROR(I{out_row}/P{out_row},"")')
         if role == 'Peer':
             peer_rows.append(out_row)
         out_row += 1
@@ -186,6 +237,11 @@ def build_cca(wb_src, wb_dst):
     ws[f'A{med_row}'].font = BOLD
 
     for col in ['Q', 'R', 'S', 'T', 'U', 'V']:
+    ws.cell(avg_row, 1, 'Average (peers only)').font = BOLD
+    ws.cell(med_row, 1, 'Median (peers only)').font = BOLD
+    peer_rng = f'Q{peer_rows[0]}:V{peer_rows[-1]}'
+
+    for idx, col in enumerate(['Q', 'R', 'S', 'T', 'U', 'V'], start=17):
         ws[f'{col}{avg_row}'] = f'=AVERAGEIF({col}{peer_rows[0]}:{col}{peer_rows[-1]},">0")'
         ws[f'{col}{med_row}'] = f'=MEDIAN(IF({col}{peer_rows[0]}:{col}{peer_rows[-1]}>0,{col}{peer_rows[0]}:{col}{peer_rows[-1]}))'
         ws[f'{col}{avg_row}'].font = BOLD
@@ -209,6 +265,14 @@ def build_cca(wb_src, wb_dst):
     )
     ws[f'H{qc_row + 1}'] = 'flags'
     ws[f'H{qc_row + 2}'] = 'flags'
+    ws[f'A{qc_row+1}'] = 'EV Bridge check (EV ≈ Market Cap + Net Debt)'
+    ws[f'A{qc_row+2}'] = 'Net debt check (Net Debt = Gross Debt - Cash)'
+
+    tolerance = 0.5
+    ws[f'G{qc_row+1}'] = f'=SUMPRODUCT(--(ABS(I{peer_rows[0]}:I{peer_rows[-1]}-(H{peer_rows[0]}:H{peer_rows[-1]}+J{peer_rows[0]}:J{peer_rows[-1]}))>{tolerance}))'
+    ws[f'G{qc_row+2}'] = f'=SUMPRODUCT(--(ABS(J{peer_rows[0]}:J{peer_rows[-1]}-(L{peer_rows[0]}:L{peer_rows[-1]}-M{peer_rows[0]}:M{peer_rows[-1]}))>{tolerance}))'
+    ws[f'H{qc_row+1}'] = 'flags'
+    ws[f'H{qc_row+2}'] = 'flags'
 
     for row in range(4, out_row):
         for col in ['A', 'B', 'C', 'D', 'E']:
@@ -225,6 +289,9 @@ def build_cca(wb_src, wb_dst):
             f'{col}4:{col}{out_row - 1}',
             CellIsRule(operator='lessThan', formula=['0'], fill=NEG_FILL),
         )
+    # highlight negative EV/EBITDA or EV/EBIT multiples
+    for col in ['R', 'S', 'U', 'V']:
+        ws.conditional_formatting.add(f'{col}4:{col}{out_row-1}', CellIsRule(operator='lessThan', formula=['0'], fill=NEG_FILL))
 
     apply_table_style(ws, 3, out_row - 1, 1, 22)
     apply_table_style(ws, avg_row, med_row, 1, 22)
@@ -234,6 +301,10 @@ def build_cca(wb_src, wb_dst):
         ws.column_dimensions[get_column_letter(i)].width = width
 
     return len(peer_rows), ws[f'G{qc_row + 1}'].value
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    return len(peer_rows), ws[f'G{qc_row+1}'].value
 
 
 def build_peer_rationale(wb_src, wb_dst):
@@ -275,12 +346,15 @@ def build_peer_rationale(wb_src, wb_dst):
             f"Price/Cap: {src_note.get('mcap', 'n/a')}; EV: {src_note.get('ev', 'n/a')}; "
             f"Net debt: {src_note.get('nd', 'n/a')}; Beta/Fundamentals as-of {asof}"
         )
+        source_text = f"Price/Cap/EV/ND: {src_note.get('mcap','n/a')}; EV: {src_note.get('ev','n/a')}; Net debt: {src_note.get('nd','n/a')}; Beta: Yahoo/peer model ({asof})"
 
         ws.cell(out, 1, name)
         ws.cell(out, 2, ticker)
         ws.cell(out, 3, fit)
         ws.cell(out, 4, rationale)
         ws.cell(out, 5, source_text)
+        if 'Excluded' in str(src_peer.cell(r, 5).value):
+            ws.cell(out, 4).value = f"{rationale} (exclusion rationale retained from base model)."
         out += 1
 
     for c in range(1, 6):
@@ -305,6 +379,7 @@ def main():
 
     wb_dst.save(DST)
 
+    # Re-open with data_only to capture cached numbers where available (formula result may be None until Excel recalc)
     wb_check = openpyxl.load_workbook(DST, data_only=False)
     wacc_val = wb_check['WACC_Model']['B25'].value
     print(f'Output path: {DST}')
