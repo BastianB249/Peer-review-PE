@@ -1,10 +1,10 @@
 ticker,region,wrds_db,identifier_type,identifier_value,notes
-AALB.AS,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
-DUE.DE,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
-BSL.DE,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+AALB.AS,EU,comp_global,gvkey,103413,Mapped from WRDS extract screenshots
+DUE.DE,EU,comp_global,gvkey,222340,Mapped from WRDS extract screenshots
+BSL.DE,EU,comp_global,gvkey,228580,Mapped from WRDS extract screenshots
 CGNX,US,comp_na,gvkey,,TODO: fill gvkey from WRDS
-JEN.DE,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
-HUBN.SW,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
-NKT.CO,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
-MRN.PA,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
-TWEKA.AS,EU,comp_global,gvkey,,TODO: fill gvkey from WRDS
+JEN.DE,EU,comp_global,gvkey,218000,Mapped from WRDS extract screenshots
+HUBN.SW,EU,comp_global,gvkey,203189,Mapped from WRDS extract screenshots
+NKT.CO,EU,comp_global,gvkey,101156,Mapped from WRDS extract screenshots
+MRN.PA,EU,comp_global,gvkey,103305,Mapped from WRDS extract screenshots
+TWEKA.AS,EU,comp_global,gvkey,104718,Mapped from WRDS extract screenshots

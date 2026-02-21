@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yfinance as yf
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -24,6 +23,8 @@ OUTPUT_FILE = Path("outputs/TKH_Peer_Analysis_submission_ready.xlsx")
 PEER_INPUT_FILE = Path("inputs/peer_universe.csv")
 WRDS_MAPPING_FILE = Path("inputs/wrds_mapping.csv")
 OVERRIDE_FILE = Path("inputs/data_overrides.csv")
+WRDS_RAW_PRICES_FILE = Path("inputs/wrds_raw_prices.csv")
+WRDS_RAW_FUNDAMENTALS_FILE = Path("inputs/wrds_raw_fundamentals.csv")
 
 USE_PROVIDER_EV_AS_TRUTH = True
 ALLOW_MIXED_SOURCES = True  # if WRDS misses a field, allow Yahoo fallback for that field
@@ -201,34 +202,6 @@ def _extract_latest_balance(balance: pd.DataFrame, labels: list[str]) -> float |
     return float(val)
 
 
-def _last_close(tkr: yf.Ticker) -> float | None:
-    try:
-        hist = tkr.history(period="5d")
-        if hist.empty:
-            return None
-        return float(hist["Close"].dropna().iloc[-1])
-    except Exception:
-        return None
-
-
-def _fetch_fx_rate(ccy: str | None, cache: dict[str, float]) -> float | None:
-    if ccy in (None, ""):
-        return None
-    if ccy == "EUR":
-        return 1.0
-    if ccy in cache:
-        return cache[ccy]
-    direct = _last_close(yf.Ticker(f"{ccy}EUR=X"))
-    if direct is not None:
-        cache[ccy] = direct
-        return direct
-    inverse = _last_close(yf.Ticker(f"EUR{ccy}=X"))
-    if inverse not in (None, 0):
-        cache[ccy] = 1.0 / float(inverse)
-        return cache[ccy]
-    return None
-
-
 def _set_if_missing(peer: PeerRow, attr: str, value: Any, source: str) -> None:
     current = getattr(peer, attr)
     if current is None and value is not None:
@@ -343,83 +316,166 @@ def fetch_from_wrds(peers: list[PeerRow], wrds_mapping: dict[str, WrdsMapping]) 
     return status
 
 
-def fetch_from_yahoo(peers: list[PeerRow], wrds_status: WrdsPullStatus) -> None:
-    logging.info("Fetching Yahoo data for market fields and fallback fields...")
-    fx_cache: dict[str, float] = {}
+def apply_local_wrds_raw_csv(
+    peers: list[PeerRow],
+    wrds_mapping: dict[str, WrdsMapping],
+    wrds_status: WrdsPullStatus,
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    if not WRDS_RAW_PRICES_FILE.exists() or not WRDS_RAW_FUNDAMENTALS_FILE.exists():
+        return None, None
 
+    prices = pd.read_csv(WRDS_RAW_PRICES_FILE, dtype={"gvkey": str})
+    funds = pd.read_csv(WRDS_RAW_FUNDAMENTALS_FILE, dtype={"gvkey": str})
+
+    prices["gvkey"] = prices["gvkey"].astype(str).str.strip()
+    funds["gvkey"] = funds["gvkey"].astype(str).str.strip()
+    prices["datadate"] = pd.to_datetime(prices["datadate"], dayfirst=True, errors="coerce")
+    funds["datadate"] = pd.to_datetime(funds["datadate"], dayfirst=True, errors="coerce")
+    funds["fyear"] = pd.to_numeric(funds["fyear"], errors="coerce")
+    for col in ["sale", "oibdp", "oiadp", "dlc", "dltt", "che", "cshoi"]:
+        if col in funds.columns:
+            funds[col] = pd.to_numeric(funds[col], errors="coerce")
+    if "prccm" in prices.columns:
+        prices["prccm"] = pd.to_numeric(prices["prccm"], errors="coerce")
+
+    peer_to_gvkey: dict[str, str] = {}
     for p in peers:
-        try:
-            tkr = yf.Ticker(p.ticker)
-            info = tkr.get_info() or {}
-            fin = tkr.financials
-            bal = tkr.balance_sheet
-        except Exception as exc:
-            logging.warning("%s: Yahoo fetch failed: %s", p.ticker, exc)
-            wrds_msg = wrds_status.per_peer_message.get(p.ticker, "")
-            if wrds_msg.startswith("WRDS success"):
-                logging.info("%s: WRDS used; Yahoo supplement unavailable due fetch error", p.ticker)
-            else:
-                logging.info("%s: No WRDS data and Yahoo unavailable (will remain missing)", p.ticker)
+        gvkey = p.gvkey.strip() if p.gvkey else ""
+        if not gvkey and p.ticker in wrds_mapping:
+            gvkey = wrds_mapping[p.ticker].identifier_value.strip()
+        if gvkey:
+            peer_to_gvkey[p.ticker] = gvkey
+
+    local_source = "WRDS raw extract (local CSV)"
+    for p in peers:
+        gvkey = peer_to_gvkey.get(p.ticker)
+        if not gvkey:
             continue
 
-        # Always Yahoo for these market fields in current model
-        if p.share_price_ccy is None and _last_close(tkr) is not None:
-            p.share_price_ccy = _last_close(tkr)
-            p.source_by_field["share_price_ccy"] = f"Yahoo Finance ({p.ticker})"
-        if p.market_cap_ccy_m is None and to_m(info.get("marketCap")) is not None:
-            p.market_cap_ccy_m = to_m(info.get("marketCap"))
-            p.source_by_field["market_cap_ccy_m"] = f"Yahoo Finance ({p.ticker})"
-        if p.enterprise_value_ccy_m is None and to_m(info.get("enterpriseValue")) is not None:
-            p.enterprise_value_ccy_m = to_m(info.get("enterpriseValue"))
-            p.source_by_field["enterprise_value_ccy_m"] = f"Yahoo Finance ({p.ticker})"
-        if p.equity_beta is None and info.get("beta") is not None:
-            p.equity_beta = info.get("beta")
-            p.source_by_field["equity_beta"] = f"Yahoo Finance ({p.ticker})"
+        fsub = funds[funds["gvkey"] == gvkey].copy()
+        if fsub.empty:
+            continue
 
-        if p.currency is None and info.get("currency") is not None:
-            p.currency = info.get("currency")
-            p.source_by_field["currency"] = f"Yahoo Finance ({p.ticker})"
+        latest = fsub.sort_values(["fyear", "datadate"]).iloc[-1]
+        _set_if_missing(p, "currency", latest.get("curcd"), local_source)
+        if latest.get("curcd") == "EUR":
+            _set_if_missing(p, "fx_to_eur", 1.0, local_source)
+        dlc = latest.get("dlc")
+        dltt = latest.get("dltt")
+        che = latest.get("che")
+        if pd.notna(dlc) and pd.notna(dltt):
+            _set_if_missing(p, "gross_debt_ccy_m", float(dlc) + float(dltt), local_source)
+        if pd.notna(che):
+            _set_if_missing(p, "cash_ccy_m", float(che), local_source)
+        if p.gross_debt_ccy_m is not None and p.cash_ccy_m is not None:
+            _set_if_missing(p, "net_debt_ccy_m", p.gross_debt_ccy_m - p.cash_ccy_m, local_source)
 
-        # fallback financials from Yahoo only if allowed
-        rev = _extract_metric_by_year(fin, ["Total Revenue", "TotalRevenue"])
-        ebitda = _extract_metric_by_year(fin, ["EBITDA"])
-        ebit = _extract_metric_by_year(fin, ["EBIT", "Operating Income", "OperatingIncome"])
-        if not ebitda:
-            da = _extract_metric_by_year(fin, ["Depreciation And Amortization", "Depreciation & Amortization"])
-            for y in set(ebit) & set(da):
-                ebitda[y] = ebit[y] + da[y]
+        for y in FISCAL_YEARS:
+            fy = fsub[fsub["fyear"] == y].sort_values("datadate")
+            if fy.empty:
+                continue
+            row = fy.iloc[-1]
+            _set_metric_if_missing(p, "revenue", y, row.get("sale"), local_source)
+            _set_metric_if_missing(p, "ebitda", y, row.get("oibdp"), local_source)
+            _set_metric_if_missing(p, "ebit", y, row.get("oiadp"), local_source)
 
-        if ALLOW_MIXED_SOURCES:
-            for y in FISCAL_YEARS:
-                _set_metric_if_missing(p, "revenue", y, to_m(rev.get(y)), f"Yahoo Finance ({p.ticker})")
-                _set_metric_if_missing(p, "ebitda", y, to_m(ebitda.get(y)), f"Yahoo Finance ({p.ticker})")
-                _set_metric_if_missing(p, "ebit", y, to_m(ebit.get(y)), f"Yahoo Finance ({p.ticker})")
+        psub = prices[prices["gvkey"] == gvkey].sort_values("datadate")
+        if not psub.empty:
+            price = psub.iloc[-1].get("prccm")
+            if pd.notna(price):
+                _set_if_missing(p, "share_price_ccy", float(price), local_source)
 
-            total_debt = _extract_latest_balance(bal, ["Total Debt", "Long Term Debt", "Current Debt"])
-            cash = _extract_latest_balance(
-                bal,
-                ["Cash And Cash Equivalents", "Cash And Cash Equivalents Including Short Term Investments", "Cash"],
-            )
-            _set_if_missing(p, "gross_debt_ccy_m", to_m(total_debt), f"Yahoo Finance ({p.ticker})")
-            _set_if_missing(p, "cash_ccy_m", to_m(cash), f"Yahoo Finance ({p.ticker})")
-            net_debt_info = to_m(info.get("netDebt"))
-            if net_debt_info is not None:
-                _set_if_missing(p, "net_debt_ccy_m", net_debt_info, f"Yahoo Finance ({p.ticker})")
-            elif p.gross_debt_ccy_m is not None and p.cash_ccy_m is not None:
-                _set_if_missing(p, "net_debt_ccy_m", p.gross_debt_ccy_m - p.cash_ccy_m, f"Yahoo Finance ({p.ticker})")
+        if p.share_price_ccy is not None and pd.notna(latest.get("cshoi")):
+            _set_if_missing(p, "market_cap_ccy_m", float(p.share_price_ccy) * float(latest.get("cshoi")), local_source)
 
-        if p.fx_to_eur is None:
-            fx = _fetch_fx_rate(p.currency, fx_cache)
-            if fx is not None:
-                p.fx_to_eur = fx
-                p.source_by_field["fx_to_eur"] = f"Yahoo FX ({p.currency}EUR)"
+        if p.market_cap_ccy_m is not None and p.net_debt_ccy_m is not None:
+            _set_if_missing(p, "enterprise_value_ccy_m", p.market_cap_ccy_m + p.net_debt_ccy_m, local_source)
 
-        wrds_msg = wrds_status.per_peer_message.get(p.ticker, "")
-        if wrds_msg.startswith("WRDS success"):
-            logging.info("%s: mixed sources (WRDS + Yahoo market fields)", p.ticker)
-        else:
-            logging.info("%s: Yahoo source used (WRDS unavailable/missing)", p.ticker)
+        wrds_status.per_peer_message[p.ticker] = "Local WRDS raw CSV applied"
 
+    logging.info("Applied local WRDS raw CSV extracts from %s and %s", WRDS_RAW_PRICES_FILE, WRDS_RAW_FUNDAMENTALS_FILE)
+    return prices, funds
+
+
+
+
+def require_beta_overrides(peers: list[PeerRow]) -> None:
+    missing = [p.ticker for p in peers if p.selected == 1 and p.equity_beta is None]
+    if missing:
+        raise ValueError(f"Missing beta overrides for selected peers: {', '.join(missing)}")
+    print(f"Beta override check passed for selected peers: {sum(1 for p in peers if p.selected==1)} peers")
+
+
+def require_wrds_coverage(peers: list[PeerRow]) -> None:
+    missing = []
+    required = [p for p in peers if p.selected == 1 or 'subject' in p.company.lower()]
+    for p in required:
+        needed = [p.share_price_ccy, p.market_cap_ccy_m, p.enterprise_value_ccy_m, p.net_debt_ccy_m, p.revenue.get(2023), p.revenue.get(2024), p.ebitda.get(2023), p.ebitda.get(2024), p.ebit.get(2023), p.ebit.get(2024)]
+        if any(v is None for v in needed):
+            missing.append(p.ticker)
+    if missing:
+        raise ValueError('Missing WRDS/raw coverage for required peers/subject: ' + ', '.join(missing))
+
+
+def print_robustness_checks(peers: list[PeerRow], tol: float = 0.5) -> None:
+    print('Robustness checks:')
+    for p in peers:
+        if p.market_cap_ccy_m is not None and p.net_debt_ccy_m is not None and p.enterprise_value_ccy_m is not None:
+            delta = abs(p.enterprise_value_ccy_m - (p.market_cap_ccy_m + p.net_debt_ccy_m))
+            msg = 'OK' if delta <= tol else f'WARN delta={delta:.2f}'
+            print(f"- {p.ticker} EV bridge: {msg}")
+        if p.market_cap_ccy_m is not None and (abs(p.market_cap_ccy_m) > 500000 or abs(p.market_cap_ccy_m) < 1):
+            print(f"- {p.ticker} WARN market cap magnitude: {p.market_cap_ccy_m:.2f}")
+        if p.enterprise_value_ccy_m is not None and (abs(p.enterprise_value_ccy_m) > 500000 or abs(p.enterprise_value_ccy_m) < 1):
+            print(f"- {p.ticker} WARN EV magnitude: {p.enterprise_value_ccy_m:.2f}")
+
+
+def _to_eur_m(value: float | None, currency: str | None, fx_to_eur: float | None) -> float | None:
+    if value is None:
+        return None
+    if currency == 'EUR':
+        return value
+    if fx_to_eur in (None, 0):
+        return None
+    return value * fx_to_eur
+
+
+def build_cca_model(wb: Workbook, peers: list[PeerRow]) -> None:
+    ws = wb.create_sheet('CCA_Model')
+    headers = ['Company', 'Ticker', 'Share price', 'Market cap (EUR m)', 'Enterprise Value (EUR m)',
+               'EV/Sales 2023', 'EV/Sales 2024', 'EV/EBITDA 2023', 'EV/EBITDA 2024', 'EV/EBIT 2023', 'EV/EBIT 2024']
+    for i,h in enumerate(headers,1):
+        ws.cell(row=1,column=i,value=h)
+    style_header(ws,1,1,len(headers))
+
+    def mult(ev,den):
+        if ev is None or den is None or den <= 0:
+            return None
+        return ev/den
+
+    row=2
+    selected_rows=[]
+    for p in peers:
+        fx = 1.0 if p.currency == 'EUR' else p.fx_to_eur
+        mc = _to_eur_m(p.market_cap_ccy_m,p.currency,fx)
+        ev = _to_eur_m(p.enterprise_value_ccy_m,p.currency,fx)
+        rev23=_to_eur_m(p.revenue.get(2023),p.currency,fx)
+        rev24=_to_eur_m(p.revenue.get(2024),p.currency,fx)
+        e23=_to_eur_m(p.ebitda.get(2023),p.currency,fx)
+        e24=_to_eur_m(p.ebitda.get(2024),p.currency,fx)
+        b23=_to_eur_m(p.ebit.get(2023),p.currency,fx)
+        b24=_to_eur_m(p.ebit.get(2024),p.currency,fx)
+        vals=[p.company,p.ticker,p.share_price_ccy,mc,ev,mult(ev,rev23),mult(ev,rev24),mult(ev,e23),mult(ev,e24),mult(ev,b23),mult(ev,b24)]
+        for c,v in enumerate(vals,1): ws.cell(row=row,column=c,value=v)
+        if p.selected==1: selected_rows.append(row)
+        row+=1
+
+    ws.cell(row=row+1,column=1,value='Average (selected peers)').font=Font(bold=True)
+    ws.cell(row=row+2,column=1,value='Median (selected peers)').font=Font(bold=True)
+    for c in range(6,12):
+        col=get_column_letter(c)
+        ws.cell(row=row+1,column=c,value=f'=IFERROR(AVERAGEIF({col}{selected_rows[0]}:{col}{selected_rows[-1]},">0"),"")')
+        ws.cell(row=row+2,column=c,value=f'=IFERROR(MEDIAN(IF({col}{selected_rows[0]}:{col}{selected_rows[-1]}>0,{col}{selected_rows[0]}:{col}{selected_rows[-1]})),"")')
 
 def apply_overrides(peers: list[PeerRow], path: Path) -> None:
     if not path.exists():
@@ -524,7 +580,12 @@ def style_header(ws, row: int, start_col: int, end_col: int) -> None:
         c.alignment = align
 
 
-def build_workbook(peers: list[PeerRow], wrds_status: WrdsPullStatus) -> None:
+def build_workbook(
+    peers: list[PeerRow],
+    wrds_status: WrdsPullStatus,
+    raw_prices: pd.DataFrame | None = None,
+    raw_fundamentals: pd.DataFrame | None = None,
+) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "Peer_Table"
@@ -643,24 +704,48 @@ def build_workbook(peers: list[PeerRow], wrds_status: WrdsPullStatus) -> None:
     equity_weight = 1 - debt_weight
     summary = [
         ("Beta methodology", f"{BETA_HORIZON} / {BETA_FREQUENCY} / {BETA_INDEX}"),
-        ("Mean levered beta", mean(sel_lev)),
-        ("Median levered beta", median(sel_lev)),
-        ("Mean unlevered beta", mean(sel_unlev)),
-        ("Median unlevered beta", median(sel_unlev)),
-        ("Relevered beta", relevered_beta),
+        ("Mean levered beta", f"=AVERAGEIF(B2:B{1 + len(peers)},1,C2:C{1 + len(peers)})"),
+        ("Median levered beta", f"=MEDIAN(IF(B2:B{1 + len(peers)}=1,C2:C{1 + len(peers)}))"),
+        ("Mean unlevered beta", f"=AVERAGEIF(B2:B{1 + len(peers)},1,G2:G{1 + len(peers)})"),
+        ("Median unlevered beta", f"=MEDIAN(IF(B2:B{1 + len(peers)}=1,G2:G{1 + len(peers)}))"),
+        ("Relevered beta", f"=B17*(1+(1-{MARGINAL_TAX_RATE})*{TARGET_D_OVER_E})"),
         ("Risk free", RISK_FREE_RATE),
         ("ERP", EQUITY_RISK_PREMIUM),
         ("Small firm premium", SMALL_FIRM_PREMIUM),
-        ("Cost of equity", cost_equity),
+        ("Cost of equity", "=B19+B18*B20+B21"),
         ("Cost of debt (pre-tax)", COST_OF_DEBT_PRE_TAX),
         ("Cost of debt methodology", COST_OF_DEBT_METHOD),
-        ("WACC", equity_weight * cost_equity + debt_weight * cost_debt_after_tax),
+        ("WACC", f"=B22*(1/(1+{TARGET_D_OVER_E}))+B23*(1-{MARGINAL_TAX_RATE})*({TARGET_D_OVER_E}/(1+{TARGET_D_OVER_E}))"),
         ("ERP source", ERP_SOURCE_NOTE),
         ("SFP source", SFP_SOURCE_NOTE),
     ]
     for i, (k, v) in enumerate(summary, len(peers) + 4):
         wacc.cell(row=i, column=1, value=k)
         wacc.cell(row=i, column=2, value=v)
+
+    if raw_prices is not None and raw_fundamentals is not None:
+        raw = wb.create_sheet("RawData_WRDS")
+        raw.cell(row=1, column=1, value="Local WRDS raw extract used in this build").font = Font(bold=True)
+        raw.cell(row=2, column=1, value="Fields used: prccm (price), cshoi (shares out, m), sale (revenue), oibdp (EBITDA), oiadp (EBIT), dlc+dltt (gross debt), che (cash)")
+        raw.cell(row=3, column=1, value="Scaling: fundamentals are treated as currency millions from WRDS; Market Cap and EV are shown in EUR m in CCA_Model.")
+        raw.cell(row=5, column=1, value="Prices table").font = Font(bold=True)
+        for c, h in enumerate(raw_prices.columns, 1):
+            raw.cell(row=6, column=c, value=h)
+        style_header(raw, 6, 1, len(raw_prices.columns))
+        for r, row_vals in enumerate(raw_prices.itertuples(index=False), 7):
+            for c, v in enumerate(row_vals, 1):
+                raw.cell(row=r, column=c, value=v)
+
+        start = 9 + len(raw_prices)
+        raw.cell(row=start, column=1, value="Fundamentals table").font = Font(bold=True)
+        for c, h in enumerate(raw_fundamentals.columns, 1):
+            raw.cell(row=start + 1, column=c, value=h)
+        style_header(raw, start + 1, 1, len(raw_fundamentals.columns))
+        for r, row_vals in enumerate(raw_fundamentals.itertuples(index=False), start + 2):
+            for c, v in enumerate(row_vals, 1):
+                raw.cell(row=r, column=c, value=v)
+
+    build_cca_model(wb, peers)
 
     # Peer rationale and clean overview
     pr = wb.create_sheet("Peer_Rationale")
@@ -711,9 +796,12 @@ def main() -> None:
     wrds_mapping = parse_wrds_mapping(WRDS_MAPPING_FILE)
     wrds_status = fetch_from_wrds(peers, wrds_mapping)
     logging.info("WRDS status: connected=%s, mapping_coverage=%s, message=%s", wrds_status.connected, wrds_status.mapping_coverage, wrds_status.connection_message)
-    fetch_from_yahoo(peers, wrds_status)
+    raw_prices, raw_fundamentals = apply_local_wrds_raw_csv(peers, wrds_mapping, wrds_status)
     apply_overrides(peers, OVERRIDE_FILE)
-    build_workbook(peers, wrds_status)
+    require_wrds_coverage(peers)
+    require_beta_overrides(peers)
+    print_robustness_checks(peers)
+    build_workbook(peers, wrds_status, raw_prices=raw_prices, raw_fundamentals=raw_fundamentals)
 
 
 if __name__ == "__main__":
