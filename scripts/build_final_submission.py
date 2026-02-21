@@ -61,6 +61,8 @@ def copy_sheet(ws_src, wb_dst: Workbook, title: str):
 def build_wacc(ws):
     # Fill missing Huber+Suhner peer stats
     ws['D7'] = -165.2416
+    for r in range(2, 11):
+        ws[f'F{r}'] = f'=IFERROR(D{r}/E{r},"")'
     ws['F2'] = '=IFERROR(D2/E2,"")'
     ws['F3'] = '=IFERROR(D3/E3,"")'
     ws['F4'] = '=IFERROR(D4/E4,"")'
@@ -104,6 +106,7 @@ def build_cca(wb_src, wb_dst):
         'Revenue 2023 (EUR m)', 'EBITDA 2023 (EUR m)', 'EBIT 2023 (EUR m)',
         'Revenue 2024 (EUR m)', 'EBITDA 2024 (EUR m)', 'EBIT 2024 (EUR m)',
         'EV/Sales 2023', 'EV/EBITDA 2023', 'EV/EBIT 2023',
+        'EV/Sales 2024', 'EV/EBITDA 2024', 'EV/EBIT 2024',
         'EV/Sales 2024', 'EV/EBITDA 2024', 'EV/EBIT 2024'
     ]
 
@@ -114,6 +117,75 @@ def build_cca(wb_src, wb_dst):
     ws['A1'].alignment = Alignment(horizontal='left')
 
     for i, h in enumerate(headers, 1):
+        cell = ws.cell(3, i, h)
+        cell.fill = HEADER_FILL
+        cell.font = WHITE_FONT
+        cell.alignment = Alignment(horizontal='center', wrap_text=True)
+
+    # Hidden helper area for transparent FX conversion without circular refs
+    helper_headers = {
+        'W': 'MCap CCY',
+        'X': 'EV CCY',
+        'Y': 'Net Debt CCY',
+        'Z': 'Revenue23 CCY',
+        'AA': 'EBITDA23 CCY',
+        'AB': 'EBIT23 CCY',
+        'AC': 'Revenue24 CCY',
+        'AD': 'EBITDA24 CCY',
+        'AE': 'EBIT24 CCY',
+        'AF': 'Gross Debt CCY',
+        'AG': 'Cash CCY',
+    }
+    for col, title in helper_headers.items():
+        ws[f'{col}3'] = title
+        ws.column_dimensions[col].hidden = True
+
+    out_row = 4
+    peer_rows: list[int] = []
+    for r in range(2, 11):
+        company = src.cell(r, 1).value
+        role = 'Subject' if 'subject' in str(company).lower() else 'Peer'
+
+        ws[f'A{out_row}'] = company
+        ws[f'B{out_row}'] = src.cell(r, 2).value
+        ws[f'C{out_row}'] = role
+        ws[f'D{out_row}'] = src.cell(r, 3).value  # keep original selected flag (NKT/Mersen remain 0)
+        ws[f'E{out_row}'] = src.cell(r, 8).value
+        ws[f'F{out_row}'] = src.cell(r, 16).value
+        ws[f'G{out_row}'] = src.cell(r, 9).value
+
+        # helper raw ccy values from Peer_Table
+        ws[f'W{out_row}'] = src.cell(r, 10).value
+        ws[f'X{out_row}'] = src.cell(r, 11).value
+        ws[f'Y{out_row}'] = src.cell(r, 14).value
+        ws[f'Z{out_row}'] = src.cell(r, 17).value
+        ws[f'AA{out_row}'] = src.cell(r, 18).value
+        ws[f'AB{out_row}'] = src.cell(r, 19).value
+        ws[f'AC{out_row}'] = src.cell(r, 23).value
+        ws[f'AD{out_row}'] = src.cell(r, 24).value
+        ws[f'AE{out_row}'] = src.cell(r, 25).value
+        ws[f'AF{out_row}'] = src.cell(r, 12).value
+        ws[f'AG{out_row}'] = src.cell(r, 13).value
+
+        # visible EUR numbers formula-driven off helper + FX
+        ws[f'H{out_row}'] = f'=IFERROR(W{out_row}*F{out_row},"")'
+        ws[f'I{out_row}'] = f'=IFERROR(X{out_row}*F{out_row},"")'
+        ws[f'J{out_row}'] = f'=IFERROR(Y{out_row}*F{out_row},"")'
+        ws[f'K{out_row}'] = f'=IFERROR(Z{out_row}*F{out_row},"")'
+        ws[f'L{out_row}'] = f'=IFERROR(AA{out_row}*F{out_row},"")'
+        ws[f'M{out_row}'] = f'=IFERROR(AB{out_row}*F{out_row},"")'
+        ws[f'N{out_row}'] = f'=IFERROR(AC{out_row}*F{out_row},"")'
+        ws[f'O{out_row}'] = f'=IFERROR(AD{out_row}*F{out_row},"")'
+        ws[f'P{out_row}'] = f'=IFERROR(AE{out_row}*F{out_row},"")'
+
+        # multiples off visible EUR values
+        ws[f'Q{out_row}'] = f'=IFERROR(I{out_row}/K{out_row},"")'
+        ws[f'R{out_row}'] = f'=IFERROR(I{out_row}/L{out_row},"")'
+        ws[f'S{out_row}'] = f'=IFERROR(I{out_row}/M{out_row},"")'
+        ws[f'T{out_row}'] = f'=IFERROR(I{out_row}/N{out_row},"")'
+        ws[f'U{out_row}'] = f'=IFERROR(I{out_row}/O{out_row},"")'
+        ws[f'V{out_row}'] = f'=IFERROR(I{out_row}/P{out_row},"")'
+
         c = ws.cell(3, i, h)
         c.fill = HEADER_FILL
         c.font = WHITE_FONT
@@ -159,6 +231,12 @@ def build_cca(wb_src, wb_dst):
 
     avg_row = out_row + 1
     med_row = out_row + 2
+    ws[f'A{avg_row}'] = 'Average (all peers, excluding subject)'
+    ws[f'A{med_row}'] = 'Median (all peers, excluding subject)'
+    ws[f'A{avg_row}'].font = BOLD
+    ws[f'A{med_row}'].font = BOLD
+
+    for col in ['Q', 'R', 'S', 'T', 'U', 'V']:
     ws.cell(avg_row, 1, 'Average (peers only)').font = BOLD
     ws.cell(med_row, 1, 'Median (peers only)').font = BOLD
     peer_rng = f'Q{peer_rows[0]}:V{peer_rows[-1]}'
@@ -175,6 +253,18 @@ def build_cca(wb_src, wb_dst):
     ws[f'A{qc_row}'].fill = SUBHEADER_FILL
     ws[f'A{qc_row}'].font = WHITE_FONT
 
+    ws[f'A{qc_row + 1}'] = 'EV Bridge check (EV ≈ Market Cap + Net Debt)'
+    ws[f'A{qc_row + 2}'] = 'Net debt check (Net Debt = Gross Debt - Cash)'
+
+    tolerance = 0.5
+    ws[f'G{qc_row + 1}'] = (
+        f'=SUMPRODUCT(--(ABS(I{peer_rows[0]}:I{peer_rows[-1]}-(H{peer_rows[0]}:H{peer_rows[-1]}+J{peer_rows[0]}:J{peer_rows[-1]}))>{tolerance}))'
+    )
+    ws[f'G{qc_row + 2}'] = (
+        f'=SUMPRODUCT(--(ABS(Y{peer_rows[0]}:Y{peer_rows[-1]}-(AF{peer_rows[0]}:AF{peer_rows[-1]}-AG{peer_rows[0]}:AG{peer_rows[-1]}))>{tolerance}))'
+    )
+    ws[f'H{qc_row + 1}'] = 'flags'
+    ws[f'H{qc_row + 2}'] = 'flags'
     ws[f'A{qc_row+1}'] = 'EV Bridge check (EV ≈ Market Cap + Net Debt)'
     ws[f'A{qc_row+2}'] = 'Net debt check (Net Debt = Gross Debt - Cash)'
 
@@ -194,6 +284,11 @@ def build_cca(wb_src, wb_dst):
         for col in ['Q', 'R', 'S', 'T', 'U', 'V']:
             ws[f'{col}{row}'].number_format = '0.00x'
 
+    for col in ['R', 'S', 'U', 'V']:
+        ws.conditional_formatting.add(
+            f'{col}4:{col}{out_row - 1}',
+            CellIsRule(operator='lessThan', formula=['0'], fill=NEG_FILL),
+        )
     # highlight negative EV/EBITDA or EV/EBIT multiples
     for col in ['R', 'S', 'U', 'V']:
         ws.conditional_formatting.add(f'{col}4:{col}{out_row-1}', CellIsRule(operator='lessThan', formula=['0'], fill=NEG_FILL))
@@ -202,6 +297,10 @@ def build_cca(wb_src, wb_dst):
     apply_table_style(ws, avg_row, med_row, 1, 22)
 
     widths = [24, 12, 10, 9, 9, 10, 14, 16, 18, 14, 16, 16, 14, 16, 16, 14, 12, 13, 11, 12, 13, 11]
+    for i, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    return len(peer_rows), ws[f'G{qc_row + 1}'].value
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -243,6 +342,10 @@ def build_peer_rationale(wb_src, wb_dst):
         fit = src_peer.cell(r, 6).value
         rationale = src_peer.cell(r, 7).value
         src_note = source_map.get(ticker, {})
+        source_text = (
+            f"Price/Cap: {src_note.get('mcap', 'n/a')}; EV: {src_note.get('ev', 'n/a')}; "
+            f"Net debt: {src_note.get('nd', 'n/a')}; Beta/Fundamentals as-of {asof}"
+        )
         source_text = f"Price/Cap/EV/ND: {src_note.get('mcap','n/a')}; EV: {src_note.get('ev','n/a')}; Net debt: {src_note.get('nd','n/a')}; Beta: Yahoo/peer model ({asof})"
 
         ws.cell(out, 1, name)
